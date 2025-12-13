@@ -352,6 +352,8 @@ class TerminalGraphicsRenderer:
             # Render layers (idle game style)
             self._render_background(state)
             self._render_scene(state)
+            self._render_subagent_connections(state)
+            self._render_subagents(state)
             self._render_claude_character(state)
             self._render_particles(state)
             self._render_stats_panel(state)
@@ -1272,6 +1274,199 @@ class TerminalGraphicsRenderer:
 
         # Activity accessories
         self._render_activity_accessory(center_x, head_y, body_y + bob, scale, activity, frame)
+
+    def _render_subagent_connections(self, state: GameState) -> None:
+        """Render connection lines from main Claude to subagents."""
+        from claude_world.types import EntityType
+
+        px = max(2, self.height // 120)
+        frame = self._frame_count
+
+        # Screen center and Claude's position
+        screen_center_x = self.width // 2
+        screen_center_y = int(self.height * 0.58)
+        claude_x = screen_center_x + int(state.main_agent.position.x)
+        claude_y = screen_center_y + int(state.main_agent.position.y)
+
+        # Get all subagents
+        subagents = [e for e in state.entities.values() if e.type == EntityType.SUB_AGENT]
+
+        for agent in subagents:
+            agent_screen_x = screen_center_x + int(agent.position.x)
+            agent_screen_y = screen_center_y + int(agent.position.y)
+
+            # Draw connection line with animated dashes
+            self._draw_connection_line(
+                claude_x, claude_y - px * 8,  # From Claude's body center
+                agent_screen_x, agent_screen_y,
+                px, frame
+            )
+
+    def _draw_connection_line(self, x1: int, y1: int, x2: int, y2: int, px: int, frame: int) -> None:
+        """Draw an animated dashed connection line between two points."""
+        # Calculate line parameters
+        dx = x2 - x1
+        dy = y2 - y1
+        distance = math.sqrt(dx * dx + dy * dy)
+
+        if distance < 1:
+            return
+
+        # Normalize direction
+        nx = dx / distance
+        ny = dy / distance
+
+        # Animated dash offset
+        dash_offset = (frame * 2) % 20
+
+        # Draw dashed line with glow effect
+        dash_len = px * 4
+        gap_len = px * 2
+        segment_len = dash_len + gap_len
+
+        # Connection color - pulsing cyan/teal
+        pulse = abs(math.sin(frame * 0.1))
+        base_color = (100 + int(50 * pulse), 200 + int(30 * pulse), 220)
+
+        # Draw each dash segment
+        pos = dash_offset
+        while pos < distance:
+            start_pos = max(0, pos)
+            end_pos = min(distance, pos + dash_len)
+
+            if end_pos > start_pos:
+                sx = int(x1 + nx * start_pos)
+                sy = int(y1 + ny * start_pos)
+                ex = int(x1 + nx * end_pos)
+                ey = int(y1 + ny * end_pos)
+
+                # Draw line segment
+                self.draw.line([(sx, sy), (ex, ey)], fill=base_color, width=max(1, px))
+
+            pos += segment_len
+
+        # Draw energy particles along the line
+        for i in range(3):
+            particle_pos = ((frame * 3 + i * 30) % int(distance))
+            px_pos = int(x1 + nx * particle_pos)
+            py_pos = int(y1 + ny * particle_pos)
+            particle_size = px + int(abs(math.sin(frame * 0.2 + i)) * px)
+            self.draw.ellipse(
+                [px_pos - particle_size, py_pos - particle_size,
+                 px_pos + particle_size, py_pos + particle_size],
+                fill=(200, 255, 255)
+            )
+
+    def _render_subagents(self, state: GameState) -> None:
+        """Render all active subagents."""
+        from claude_world.types import EntityType
+
+        px = max(2, self.height // 120)
+        frame = self._frame_count
+
+        # Screen center for position offset
+        screen_center_x = self.width // 2
+        screen_center_y = int(self.height * 0.58)
+
+        # Get all subagents
+        subagents = [e for e in state.entities.values() if e.type == EntityType.SUB_AGENT]
+
+        for agent in subagents:
+            agent_x = screen_center_x + int(agent.position.x)
+            agent_y = screen_center_y + int(agent.position.y)
+            self._draw_subagent(agent_x, agent_y, agent, px, frame)
+
+    def _draw_subagent(self, x: int, y: int, agent, px: int, frame: int) -> None:
+        """Draw a single subagent character."""
+        # Subagent colors based on type
+        agent_colors = {
+            "Explore": ((100, 200, 150), (70, 160, 120)),    # Green
+            "Plan": ((180, 140, 220), (140, 100, 180)),       # Purple
+            "general-purpose": ((150, 180, 220), (110, 140, 180)),  # Blue
+        }
+        body_color, dark_color = agent_colors.get(
+            agent.agent_type, ((150, 180, 220), (110, 140, 180))
+        )
+        outline = self.COLORS["outline"]
+
+        # Bobbing animation
+        bob = int(math.sin(frame * 0.1 + hash(agent.id) % 100) * px)
+
+        # Size (smaller than main Claude)
+        body_w = int(px * 6)
+        body_h = int(px * 5)
+        head_w = int(px * 5)
+        head_h = int(px * 5)
+
+        # Shadow
+        self.draw.ellipse(
+            [x - px * 4, y + px, x + px * 4, y + px * 3],
+            fill=(60, 120, 50)
+        )
+
+        # Body outline + fill
+        self.draw.rectangle(
+            [x - body_w // 2 - px, y - body_h + bob - px,
+             x + body_w // 2 + px, y + bob + px],
+            fill=outline
+        )
+        self.draw.rectangle(
+            [x - body_w // 2, y - body_h + bob,
+             x + body_w // 2, y + bob],
+            fill=body_color
+        )
+        self.draw.rectangle(
+            [x - body_w // 2, y - body_h + bob,
+             x - body_w // 2 + px * 2, y + bob],
+            fill=dark_color
+        )
+
+        # Head outline + fill
+        head_y = y - body_h - head_h // 2 + bob
+        self.draw.rectangle(
+            [x - head_w // 2 - px, head_y - head_h // 2 - px,
+             x + head_w // 2 + px, head_y + head_h // 2 + px],
+            fill=outline
+        )
+        self.draw.rectangle(
+            [x - head_w // 2, head_y - head_h // 2,
+             x + head_w // 2, head_y + head_h // 2],
+            fill=body_color
+        )
+
+        # Eyes
+        eye_y = head_y - px
+        self.draw.rectangle(
+            [x - px * 2, eye_y, x - px, eye_y + px * 2],
+            fill=self.COLORS["claude_eyes"]
+        )
+        self.draw.rectangle(
+            [x + px, eye_y, x + px * 2, eye_y + px * 2],
+            fill=self.COLORS["claude_eyes"]
+        )
+
+        # Activity indicator (small orbiting dot)
+        orbit_angle = frame * 0.15 + hash(agent.id) % 100
+        orbit_r = px * 4
+        dot_x = x + int(math.cos(orbit_angle) * orbit_r)
+        dot_y = head_y - head_h + int(math.sin(orbit_angle) * orbit_r * 0.5)
+        dot_color = (255, 255, 150) if agent.activity.value == "exploring" else (200, 200, 255)
+        self.draw.ellipse(
+            [dot_x - px, dot_y - px, dot_x + px, dot_y + px],
+            fill=dot_color
+        )
+
+        # Agent type label (small text above)
+        type_short = {
+            "Explore": "EXP",
+            "Plan": "PLAN",
+            "general-purpose": "GEN",
+        }.get(agent.agent_type, "AGT")
+        self.draw.text(
+            (x - px * 3, head_y - head_h - px * 4),
+            type_short,
+            fill=(200, 200, 200)
+        )
 
     def _render_activity_accessory(self, x: int, head_y: int, body_y: int,
                                     scale: float, activity: str, frame: int) -> None:
