@@ -1,0 +1,6 @@
+#!/bin/bash
+# Claude World UserPromptSubmit Hook
+# Called when user submits a prompt
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+python3 "$SCRIPT_DIR/hook_client.py" UserPromptSubmit

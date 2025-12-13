@@ -1,0 +1,6 @@
+#!/bin/bash
+# Claude World Stop Hook
+# Called when Claude session ends
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+python3 "$SCRIPT_DIR/hook_client.py" Stop
