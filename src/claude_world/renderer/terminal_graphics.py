@@ -482,11 +482,175 @@ class TerminalGraphicsRenderer:
             fill=self.COLORS["grass_light"]
         )
 
+        # Draw interactive world objects at each location
+        self._draw_world_objects(center_x, int(self.height * 0.58), px, frame, state)
+
         # Draw clouds in the sky area
         self._draw_pixel_clouds(frame, state.world.time_of_day.phase)
 
         # Draw ambient floating particles (leaves during day, fireflies at night)
         self._draw_ambient_particles(frame, state.world.time_of_day.phase, px)
+
+    def _draw_world_objects(self, center_x: int, center_y: int, px: int, frame: int, state: GameState) -> None:
+        """Draw interactive objects at world locations."""
+        # Get Claude's current location to highlight active objects
+        current_loc = state.main_agent.current_location
+
+        # Rock pile (right side) - for searching/bashing
+        rock_x = center_x + 75
+        rock_y = center_y + 25
+        self._draw_rock_pile(rock_x, rock_y, px, frame, active=(current_loc == "rock_pile"))
+
+        # Sandy patch (lower left) - for writing/building
+        sand_x = center_x - 55
+        sand_y = center_y + 35
+        self._draw_sand_patch(sand_x, sand_y, px, frame, active=(current_loc == "sand_patch"))
+
+        # Tide pool (right, near water) - for fetching
+        pool_x = center_x + 85
+        pool_y = center_y - 10
+        self._draw_tide_pool(pool_x, pool_y, px, frame, active=(current_loc == "tide_pool"))
+
+        # Bushes (lower right) - for searching
+        bush_x = center_x + 60
+        bush_y = center_y + 45
+        self._draw_bush(bush_x, bush_y, px, frame, active=(current_loc == "bushes"))
+
+        # Message bottle at shore (far left)
+        bottle_x = center_x - 85
+        bottle_y = center_y + 20
+        self._draw_message_bottle(bottle_x, bottle_y, px, frame, active=(current_loc == "shore"))
+
+        # Thinking spot marker on hilltop (upper center)
+        hilltop_x = center_x
+        hilltop_y = center_y - 50
+        self._draw_thinking_spot(hilltop_x, hilltop_y, px, frame, active=(current_loc == "hilltop"))
+
+    def _draw_rock_pile(self, x: int, y: int, px: int, frame: int, active: bool = False) -> None:
+        """Draw a pile of rocks."""
+        rock_colors = [(140, 140, 130), (120, 115, 110), (160, 155, 150)]
+        outline = self.COLORS["outline"]
+
+        # Draw 3 rocks in a pile
+        rocks = [(-px*3, 0, px*4), (px*2, -px, px*3), (0, -px*2, px*3)]
+        for i, (ox, oy, size) in enumerate(rocks):
+            rx, ry = x + ox, y + oy
+            # Outline
+            self.draw.ellipse([rx - size - px, ry - size//2 - px, rx + size + px, ry + size//2 + px], fill=outline)
+            # Rock
+            color = rock_colors[i % len(rock_colors)]
+            if active:
+                # Brighten when active
+                color = tuple(min(255, c + 30) for c in color)
+            self.draw.ellipse([rx - size, ry - size//2, rx + size, ry + size//2], fill=color)
+
+        # When active, show searching particles
+        if active:
+            for i in range(3):
+                spark_x = x + int(math.sin(frame * 0.2 + i) * px * 4)
+                spark_y = y - px * 3 - i * px * 2 - int(abs(math.sin(frame * 0.15 + i)) * px * 2)
+                self.draw.rectangle([spark_x - px, spark_y - px, spark_x + px, spark_y + px], fill=(255, 220, 100))
+
+    def _draw_sand_patch(self, x: int, y: int, px: int, frame: int, active: bool = False) -> None:
+        """Draw a sandy area with writing marks."""
+        sand_color = (230, 210, 170)
+        sand_dark = (200, 180, 140)
+
+        # Sandy area
+        self.draw.ellipse([x - px*6, y - px*3, x + px*6, y + px*3], fill=sand_color)
+        self.draw.ellipse([x - px*4, y - px*2, x + px*4, y + px*2], fill=sand_dark)
+
+        # When active, show writing marks appearing
+        if active:
+            # Animated marks in sand
+            marks = int((frame % 60) / 15)
+            for i in range(min(marks + 1, 4)):
+                mx = x - px*3 + i * px * 2
+                my = y - px + int(math.sin(i) * px)
+                self.draw.line([(mx, my), (mx + px, my + px)], fill=(180, 160, 120), width=max(1, px//2))
+
+    def _draw_tide_pool(self, x: int, y: int, px: int, frame: int, active: bool = False) -> None:
+        """Draw a small tide pool."""
+        water_color = (100, 180, 220)
+        water_light = (140, 200, 240)
+        outline = self.COLORS["outline"]
+
+        # Pool outline and fill
+        self.draw.ellipse([x - px*5 - px, y - px*3 - px, x + px*5 + px, y + px*3 + px], fill=outline)
+        self.draw.ellipse([x - px*5, y - px*3, x + px*5, y + px*3], fill=water_color)
+
+        # Animated ripples
+        ripple_offset = int(math.sin(frame * 0.1) * px)
+        self.draw.ellipse([x - px*2 + ripple_offset, y - px, x + px*2 + ripple_offset, y + px], fill=water_light)
+
+        # When active, show something being fetched
+        if active:
+            # Rising bubbles
+            for i in range(2):
+                bx = x + int(math.sin(frame * 0.15 + i * 2) * px * 2)
+                by = y - int((frame * 0.5 + i * 10) % (px * 5))
+                self.draw.ellipse([bx - px, by - px, bx + px, by + px], fill=water_light)
+
+    def _draw_bush(self, x: int, y: int, px: int, frame: int, active: bool = False) -> None:
+        """Draw bushes for searching."""
+        bush_color = (80, 140, 70)
+        bush_light = (100, 170, 90)
+        outline = self.COLORS["outline"]
+
+        # Multiple bush blobs
+        blobs = [(-px*2, 0), (px*2, -px), (0, px)]
+        for ox, oy in blobs:
+            bx, by = x + ox, y + oy
+            self.draw.ellipse([bx - px*3 - px, by - px*2 - px, bx + px*3 + px, by + px*2 + px], fill=outline)
+            self.draw.ellipse([bx - px*3, by - px*2, bx + px*3, by + px*2], fill=bush_color)
+            self.draw.ellipse([bx - px*2, by - px*2, bx + px, by], fill=bush_light)
+
+        # When active, bushes rustle
+        if active:
+            rustle = int(math.sin(frame * 0.3) * px)
+            for ox, oy in blobs:
+                bx, by = x + ox + rustle, y + oy
+                self.draw.ellipse([bx - px*2, by - px, bx + px*2, by + px], fill=bush_light)
+
+    def _draw_message_bottle(self, x: int, y: int, px: int, frame: int, active: bool = False) -> None:
+        """Draw a message in a bottle."""
+        bottle_color = (180, 220, 200)
+        cork_color = (160, 120, 80)
+        outline = self.COLORS["outline"]
+
+        # Bottle body
+        self.draw.ellipse([x - px*2 - px, y - px*3 - px, x + px*2 + px, y + px*2 + px], fill=outline)
+        self.draw.ellipse([x - px*2, y - px*3, x + px*2, y + px*2], fill=bottle_color)
+
+        # Neck
+        self.draw.rectangle([x - px, y - px*4, x + px, y - px*2], fill=bottle_color)
+
+        # Cork
+        self.draw.rectangle([x - px, y - px*5, x + px, y - px*4], fill=cork_color)
+
+        # When active, show message being written/sent
+        if active:
+            # Glowing effect
+            glow = abs(math.sin(frame * 0.1))
+            glow_size = int(px * 2 + glow * px * 2)
+            self.draw.ellipse([x - glow_size, y - glow_size, x + glow_size, y + glow_size],
+                            fill=(255, 255, 200, 100))
+
+    def _draw_thinking_spot(self, x: int, y: int, px: int, frame: int, active: bool = False) -> None:
+        """Draw a thinking spot marker on the hilltop."""
+        # Small raised mound
+        mound_color = (140, 180, 120)
+        self.draw.ellipse([x - px*4, y - px, x + px*4, y + px*2], fill=mound_color)
+
+        # When active, show thought sparkles
+        if active:
+            for i in range(4):
+                angle = frame * 0.05 + i * math.pi / 2
+                dist = px * 4 + int(math.sin(frame * 0.1 + i) * px)
+                sx = x + int(math.cos(angle) * dist)
+                sy = y - px * 2 + int(math.sin(angle) * dist * 0.5)
+                size = px if (i + frame // 10) % 2 == 0 else px // 2
+                self.draw.rectangle([sx - size, sy - size, sx + size, sy + size], fill=(255, 255, 180))
 
     def _draw_ambient_particles(self, frame: int, phase: str, px: int) -> None:
         """Draw floating ambient particles for a living world feel."""
