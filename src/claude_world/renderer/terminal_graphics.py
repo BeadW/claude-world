@@ -496,6 +496,11 @@ class TerminalGraphicsRenderer:
         # Get Claude's current location to highlight active objects
         current_loc = state.main_agent.current_location
 
+        # Palm tree reading spot (upper left) - for reading/resting
+        palm_x = center_x - 70
+        palm_y = center_y - 15
+        self._draw_reading_palm(palm_x, palm_y, px, frame, active=(current_loc == "palm_tree"))
+
         # Rock pile (right side) - for searching/bashing
         rock_x = center_x + 75
         rock_y = center_y + 25
@@ -526,15 +531,110 @@ class TerminalGraphicsRenderer:
         hilltop_y = center_y - 50
         self._draw_thinking_spot(hilltop_x, hilltop_y, px, frame, active=(current_loc == "hilltop"))
 
+    def _draw_reading_palm(self, x: int, y: int, px: int, frame: int, active: bool = False) -> None:
+        """Draw a palm tree with reading spot beneath it."""
+        trunk_color = (120, 80, 50)
+        trunk_dark = (90, 60, 40)
+        frond_color = (60, 140, 60)
+        frond_light = (90, 170, 80)
+        outline = self.COLORS["outline"]
+
+        # Sway animation
+        sway = int(math.sin(frame * 0.04) * px * 2)
+
+        # Shadow on ground
+        self.draw.ellipse([x - px*6, y + px*4, x + px*6, y + px*6], fill=(60, 120, 50))
+
+        # Trunk - curved palm trunk
+        for i in range(4):
+            trunk_x = x + int(math.sin(i * 0.3) * px)
+            trunk_y = y - i * px * 3
+            self.draw.rectangle([trunk_x - px*2 - px, trunk_y - px*2,
+                               trunk_x + px*2 + px, trunk_y + px*2], fill=outline)
+            self.draw.rectangle([trunk_x - px*2, trunk_y - px*2,
+                               trunk_x + px*2, trunk_y + px*2], fill=trunk_color)
+            self.draw.rectangle([trunk_x - px, trunk_y - px*2,
+                               trunk_x, trunk_y + px*2], fill=trunk_dark)
+
+        # Coconuts
+        coconut_y = y - px * 10
+        for i, ox in enumerate([-px*2, px*2]):
+            self.draw.ellipse([x + ox + sway - px*2, coconut_y - px*2,
+                             x + ox + sway + px*2, coconut_y + px*2], fill=(100, 70, 40))
+
+        # Palm fronds
+        frond_base_y = y - px * 12
+        fronds = [(-1.2, 0.8), (-0.6, 0.9), (0, 1.0), (0.6, 0.9), (1.2, 0.8)]
+        for angle_offset, length_mult in fronds:
+            angle = math.pi / 2 + angle_offset + sway * 0.02
+            frond_len = px * 8 * length_mult
+            end_x = x + sway + int(math.cos(angle) * frond_len)
+            end_y = frond_base_y + int(math.sin(angle) * frond_len * 0.3)
+
+            # Draw frond as elongated shape
+            mid_x = x + sway + int(math.cos(angle) * frond_len * 0.5)
+            mid_y = frond_base_y + int(math.sin(angle) * frond_len * 0.15)
+
+            # Frond segments
+            for j in range(3):
+                seg_t = j / 3.0
+                seg_x = x + sway + int(math.cos(angle) * frond_len * seg_t)
+                seg_y = frond_base_y + int(math.sin(angle) * frond_len * 0.3 * seg_t) - j * px
+                seg_color = frond_light if j == 0 else frond_color
+                self.draw.ellipse([seg_x - px*2, seg_y - px, seg_x + px*2, seg_y + px], fill=seg_color)
+
+        # When active (reading), show book/scroll and reading effects
+        if active:
+            # Book resting on ground beneath palm
+            book_x = x - px * 3
+            book_y = y + px * 2
+            book_w = px * 5
+            book_h = px * 3
+
+            # Book outline and fill
+            self.draw.rectangle([book_x - px, book_y - px, book_x + book_w + px, book_y + book_h + px],
+                              fill=outline)
+            self.draw.rectangle([book_x, book_y, book_x + book_w, book_y + book_h],
+                              fill=(240, 230, 210))
+            # Book spine
+            self.draw.rectangle([book_x + book_w//2 - px//2, book_y, book_x + book_w//2 + px//2, book_y + book_h],
+                              fill=(180, 140, 100))
+
+            # Animated page turn
+            page_phase = (frame % 90) / 90.0
+            if page_phase > 0.7:
+                # Page lifting
+                page_lift = int((page_phase - 0.7) / 0.3 * px * 3)
+                self.draw.polygon([
+                    (book_x + book_w//2, book_y),
+                    (book_x + book_w, book_y - page_lift),
+                    (book_x + book_w, book_y + book_h),
+                    (book_x + book_w//2, book_y + book_h)
+                ], fill=(255, 250, 240))
+
+            # Reading sparkles/highlights
+            for i in range(3):
+                sparkle_phase = (frame * 0.1 + i * 2.5) % (math.pi * 2)
+                sparkle_x = book_x + book_w//2 + int(math.cos(sparkle_phase) * px * 4)
+                sparkle_y = book_y - px * 2 + int(math.sin(sparkle_phase) * px * 2)
+                if (frame + i * 11) % 20 < 14:
+                    self.draw.rectangle([sparkle_x - px//2, sparkle_y - px//2,
+                                       sparkle_x + px//2, sparkle_y + px//2], fill=(255, 255, 200))
+
     def _draw_rock_pile(self, x: int, y: int, px: int, frame: int, active: bool = False) -> None:
         """Draw a pile of rocks."""
         rock_colors = [(140, 140, 130), (120, 115, 110), (160, 155, 150)]
         outline = self.COLORS["outline"]
 
+        # When active, rocks shake
+        shake = int(math.sin(frame * 0.4) * px) if active else 0
+
         # Draw 3 rocks in a pile
         rocks = [(-px*3, 0, px*4), (px*2, -px, px*3), (0, -px*2, px*3)]
         for i, (ox, oy, size) in enumerate(rocks):
-            rx, ry = x + ox, y + oy
+            # Add individual rock shake when active
+            rock_shake = int(math.sin(frame * 0.5 + i * 1.5) * px) if active else 0
+            rx, ry = x + ox + shake, y + oy + rock_shake
             # Outline
             self.draw.ellipse([rx - size - px, ry - size//2 - px, rx + size + px, ry + size//2 + px], fill=outline)
             # Rock
@@ -544,113 +644,264 @@ class TerminalGraphicsRenderer:
                 color = tuple(min(255, c + 30) for c in color)
             self.draw.ellipse([rx - size, ry - size//2, rx + size, ry + size//2], fill=color)
 
-        # When active, show searching particles
+        # When active, show sparks and dust particles
         if active:
-            for i in range(3):
-                spark_x = x + int(math.sin(frame * 0.2 + i) * px * 4)
-                spark_y = y - px * 3 - i * px * 2 - int(abs(math.sin(frame * 0.15 + i)) * px * 2)
-                self.draw.rectangle([spark_x - px, spark_y - px, spark_x + px, spark_y + px], fill=(255, 220, 100))
+            # Sparks flying upward
+            for i in range(4):
+                spark_x = x + int(math.sin(frame * 0.25 + i * 1.5) * px * 5)
+                spark_y = y - px * 4 - int((frame * 2 + i * 8) % (px * 8))
+                spark_size = px if (frame + i) % 3 == 0 else px // 2
+                self.draw.rectangle([spark_x - spark_size, spark_y - spark_size,
+                                   spark_x + spark_size, spark_y + spark_size], fill=(255, 220, 100))
+
+            # Dust puffs
+            for i in range(2):
+                dust_x = x + int(math.cos(frame * 0.1 + i * 3) * px * 6)
+                dust_y = y + px * 2 + int(math.sin(frame * 0.08 + i) * px)
+                dust_size = px * 2 + int(abs(math.sin(frame * 0.1 + i)) * px)
+                self.draw.ellipse([dust_x - dust_size, dust_y - dust_size,
+                                 dust_x + dust_size, dust_y + dust_size], fill=(180, 170, 160))
 
     def _draw_sand_patch(self, x: int, y: int, px: int, frame: int, active: bool = False) -> None:
         """Draw a sandy area with writing marks."""
         sand_color = (230, 210, 170)
         sand_dark = (200, 180, 140)
+        sand_light = (245, 230, 195)
 
-        # Sandy area
+        # Sandy area - base
         self.draw.ellipse([x - px*6, y - px*3, x + px*6, y + px*3], fill=sand_color)
         self.draw.ellipse([x - px*4, y - px*2, x + px*4, y + px*2], fill=sand_dark)
 
-        # When active, show writing marks appearing
+        # When active, show writing animation
         if active:
-            # Animated marks in sand
-            marks = int((frame % 60) / 15)
-            for i in range(min(marks + 1, 4)):
-                mx = x - px*3 + i * px * 2
-                my = y - px + int(math.sin(i) * px)
-                self.draw.line([(mx, my), (mx + px, my + px)], fill=(180, 160, 120), width=max(1, px//2))
+            # Highlight the active writing area
+            glow_size = px * 5 + int(math.sin(frame * 0.1) * px)
+            self.draw.ellipse([x - glow_size, y - glow_size//2 - px,
+                             x + glow_size, y + glow_size//2], fill=sand_light)
+
+            # Animated writing marks appearing one by one
+            write_cycle = frame % 120
+            num_marks = min((write_cycle // 20) + 1, 6)
+
+            for i in range(num_marks):
+                # Different stroke patterns
+                mx = x - px*4 + (i % 3) * px * 3
+                my = y - px * 2 + (i // 3) * px * 2
+
+                # Animate the latest mark being drawn
+                if i == num_marks - 1:
+                    progress = (write_cycle % 20) / 20.0
+                    stroke_len = int(px * 2 * progress)
+                else:
+                    stroke_len = px * 2
+
+                if i % 2 == 0:
+                    # Horizontal strokes
+                    self.draw.line([(mx, my), (mx + stroke_len, my)],
+                                 fill=(160, 140, 100), width=max(1, px//2))
+                else:
+                    # Diagonal strokes
+                    self.draw.line([(mx, my), (mx + stroke_len, my + stroke_len//2)],
+                                 fill=(160, 140, 100), width=max(1, px//2))
+
+            # Sand grains flying up from writing
+            for i in range(3):
+                grain_x = x + int(math.sin(frame * 0.3 + i * 2) * px * 3)
+                grain_y = y - px * 2 - int((frame + i * 5) % 10) * px // 2
+                self.draw.rectangle([grain_x, grain_y, grain_x + px, grain_y + px], fill=sand_color)
 
     def _draw_tide_pool(self, x: int, y: int, px: int, frame: int, active: bool = False) -> None:
         """Draw a small tide pool."""
         water_color = (100, 180, 220)
         water_light = (140, 200, 240)
+        water_deep = (70, 150, 200)
         outline = self.COLORS["outline"]
 
         # Pool outline and fill
         self.draw.ellipse([x - px*5 - px, y - px*3 - px, x + px*5 + px, y + px*3 + px], fill=outline)
         self.draw.ellipse([x - px*5, y - px*3, x + px*5, y + px*3], fill=water_color)
 
-        # Animated ripples
-        ripple_offset = int(math.sin(frame * 0.1) * px)
-        self.draw.ellipse([x - px*2 + ripple_offset, y - px, x + px*2 + ripple_offset, y + px], fill=water_light)
+        # Animated ripples - expand outward
+        ripple_phase = (frame * 0.08) % (math.pi * 2)
+        ripple_size = int(px * 2 + math.sin(ripple_phase) * px)
+        self.draw.ellipse([x - ripple_size, y - ripple_size//2,
+                         x + ripple_size, y + ripple_size//2], fill=water_light)
 
-        # When active, show something being fetched
+        # When active, show fetching animation
         if active:
-            # Rising bubbles
+            # Glowing center - something being retrieved
+            glow_pulse = abs(math.sin(frame * 0.15))
+            glow_color = (int(140 + 60 * glow_pulse), int(200 + 40 * glow_pulse), int(240 + 15 * glow_pulse))
+            glow_size = int(px * 2 + glow_pulse * px * 2)
+            self.draw.ellipse([x - glow_size, y - glow_size,
+                             x + glow_size, y + glow_size], fill=glow_color)
+
+            # Rising bubbles stream
+            for i in range(4):
+                bubble_phase = (frame * 0.4 + i * 15) % 30
+                bx = x + int(math.sin(frame * 0.2 + i * 1.5) * px * 3)
+                by = y - int(bubble_phase * px * 0.5)
+                bubble_size = px if bubble_phase < 20 else px // 2
+                if bubble_phase < 25:
+                    self.draw.ellipse([bx - bubble_size, by - bubble_size,
+                                     bx + bubble_size, by + bubble_size], fill=water_light)
+
+            # Ripple rings expanding outward
             for i in range(2):
-                bx = x + int(math.sin(frame * 0.15 + i * 2) * px * 2)
-                by = y - int((frame * 0.5 + i * 10) % (px * 5))
-                self.draw.ellipse([bx - px, by - px, bx + px, by + px], fill=water_light)
+                ring_phase = (frame * 0.1 + i * 1.5) % 3.0
+                ring_size = int(px * 2 + ring_phase * px * 2)
+                ring_alpha = 1.0 - (ring_phase / 3.0)
+                if ring_alpha > 0.2:
+                    self.draw.ellipse([x - ring_size, y - ring_size//2,
+                                     x + ring_size, y + ring_size//2],
+                                    outline=water_light, width=max(1, int(px * ring_alpha)))
 
     def _draw_bush(self, x: int, y: int, px: int, frame: int, active: bool = False) -> None:
         """Draw bushes for searching."""
         bush_color = (80, 140, 70)
         bush_light = (100, 170, 90)
+        bush_dark = (60, 110, 50)
         outline = self.COLORS["outline"]
+
+        # When active, bushes shake more dramatically
+        base_rustle = int(math.sin(frame * 0.5) * px * 2) if active else 0
 
         # Multiple bush blobs
         blobs = [(-px*2, 0), (px*2, -px), (0, px)]
-        for ox, oy in blobs:
-            bx, by = x + ox, y + oy
+        for i, (ox, oy) in enumerate(blobs):
+            # Individual rustle for each blob
+            blob_rustle = int(math.sin(frame * 0.6 + i * 1.2) * px) if active else 0
+            bx, by = x + ox + base_rustle + blob_rustle, y + oy
             self.draw.ellipse([bx - px*3 - px, by - px*2 - px, bx + px*3 + px, by + px*2 + px], fill=outline)
             self.draw.ellipse([bx - px*3, by - px*2, bx + px*3, by + px*2], fill=bush_color)
             self.draw.ellipse([bx - px*2, by - px*2, bx + px, by], fill=bush_light)
 
-        # When active, bushes rustle
+        # When active, show leaves flying out and a peek effect
         if active:
-            rustle = int(math.sin(frame * 0.3) * px)
-            for ox, oy in blobs:
-                bx, by = x + ox + rustle, y + oy
-                self.draw.ellipse([bx - px*2, by - px, bx + px*2, by + px], fill=bush_light)
+            # Leaves flying out from searching
+            for i in range(4):
+                leaf_phase = (frame * 0.3 + i * 8) % 20
+                leaf_x = x + int(math.cos(frame * 0.2 + i * 1.5) * (px * 3 + leaf_phase * px * 0.5))
+                leaf_y = y - px * 2 - int(leaf_phase * px * 0.4)
+                leaf_color = bush_light if i % 2 == 0 else bush_color
+                if leaf_phase < 15:
+                    self.draw.rectangle([leaf_x - px, leaf_y - px, leaf_x + px, leaf_y + px], fill=leaf_color)
+
+            # Parting effect - darker gap in center showing Claude is looking inside
+            gap_x = x + int(math.sin(frame * 0.1) * px)
+            self.draw.ellipse([gap_x - px*2, y - px*2, gap_x + px*2, y + px], fill=bush_dark)
+
+            # Question marks or search particles
+            for i in range(2):
+                search_x = x + int(math.sin(frame * 0.15 + i * 3) * px * 4)
+                search_y = y - px * 4 - int(abs(math.sin(frame * 0.2 + i)) * px * 2)
+                self.draw.ellipse([search_x - px, search_y - px, search_x + px, search_y + px],
+                                fill=(255, 255, 200))
 
     def _draw_message_bottle(self, x: int, y: int, px: int, frame: int, active: bool = False) -> None:
         """Draw a message in a bottle."""
         bottle_color = (180, 220, 200)
+        bottle_light = (200, 240, 220)
         cork_color = (160, 120, 80)
+        paper_color = (255, 250, 230)
         outline = self.COLORS["outline"]
 
+        # When active, the bottle rocks back and forth
+        rock = int(math.sin(frame * 0.15) * px) if active else 0
+
         # Bottle body
-        self.draw.ellipse([x - px*2 - px, y - px*3 - px, x + px*2 + px, y + px*2 + px], fill=outline)
-        self.draw.ellipse([x - px*2, y - px*3, x + px*2, y + px*2], fill=bottle_color)
+        self.draw.ellipse([x - px*2 - px + rock, y - px*3 - px, x + px*2 + px + rock, y + px*2 + px], fill=outline)
+        self.draw.ellipse([x - px*2 + rock, y - px*3, x + px*2 + rock, y + px*2], fill=bottle_color)
+
+        # Glass shine
+        self.draw.ellipse([x - px + rock, y - px*2, x + rock, y - px], fill=bottle_light)
 
         # Neck
-        self.draw.rectangle([x - px, y - px*4, x + px, y - px*2], fill=bottle_color)
+        self.draw.rectangle([x - px + rock, y - px*4, x + px + rock, y - px*2], fill=bottle_color)
 
-        # Cork
-        self.draw.rectangle([x - px, y - px*5, x + px, y - px*4], fill=cork_color)
+        # Cork (pops off when active)
+        cork_y = y - px*5 - (int(math.sin(frame * 0.2) * px * 2) if active else 0)
+        self.draw.rectangle([x - px + rock, cork_y, x + px + rock, cork_y + px], fill=cork_color)
 
         # When active, show message being written/sent
         if active:
-            # Glowing effect
-            glow = abs(math.sin(frame * 0.1))
-            glow_size = int(px * 2 + glow * px * 2)
-            self.draw.ellipse([x - glow_size, y - glow_size, x + glow_size, y + glow_size],
-                            fill=(255, 255, 200, 100))
+            # Pulsing glow around bottle
+            glow = abs(math.sin(frame * 0.12))
+            glow_size = int(px * 4 + glow * px * 3)
+            glow_color = (255, 255, 200)
+            self.draw.ellipse([x - glow_size, y - glow_size - px*2,
+                             x + glow_size, y + glow_size], fill=glow_color)
+            # Redraw bottle on top of glow
+            self.draw.ellipse([x - px*2 + rock, y - px*3, x + px*2 + rock, y + px*2], fill=bottle_color)
+            self.draw.rectangle([x - px + rock, y - px*4, x + px + rock, y - px*2], fill=bottle_color)
+
+            # Paper/message floating out
+            paper_phase = (frame * 0.15) % (math.pi * 2)
+            paper_y_offset = int(math.sin(paper_phase) * px * 2)
+            paper_x = x + rock + int(math.cos(paper_phase) * px)
+            paper_y = y - px * 6 - paper_y_offset - int(abs(math.sin(frame * 0.1)) * px * 3)
+            self.draw.rectangle([paper_x - px, paper_y - px, paper_x + px*2, paper_y + px], fill=paper_color)
+            # Writing on paper
+            self.draw.line([(paper_x - px + 1, paper_y), (paper_x + px, paper_y)], fill=(100, 100, 100))
+
+            # Sparkles around message
+            for i in range(3):
+                sparkle_angle = frame * 0.1 + i * 2.1
+                sparkle_x = x + int(math.cos(sparkle_angle) * px * 5)
+                sparkle_y = y - px * 4 + int(math.sin(sparkle_angle) * px * 3)
+                if (frame + i * 7) % 15 < 10:
+                    self.draw.rectangle([sparkle_x, sparkle_y, sparkle_x + px, sparkle_y + px],
+                                       fill=(255, 255, 150))
 
     def _draw_thinking_spot(self, x: int, y: int, px: int, frame: int, active: bool = False) -> None:
         """Draw a thinking spot marker on the hilltop."""
         # Small raised mound
         mound_color = (140, 180, 120)
+        mound_light = (160, 200, 140)
         self.draw.ellipse([x - px*4, y - px, x + px*4, y + px*2], fill=mound_color)
+        self.draw.ellipse([x - px*2, y - px, x + px*2, y + px], fill=mound_light)
 
-        # When active, show thought sparkles
+        # When active, show elaborate thinking effects
         if active:
-            for i in range(4):
-                angle = frame * 0.05 + i * math.pi / 2
-                dist = px * 4 + int(math.sin(frame * 0.1 + i) * px)
+            # Orbiting thought sparkles
+            for i in range(6):
+                angle = frame * 0.08 + i * math.pi / 3
+                dist = px * 5 + int(math.sin(frame * 0.15 + i * 0.7) * px * 2)
                 sx = x + int(math.cos(angle) * dist)
-                sy = y - px * 2 + int(math.sin(angle) * dist * 0.5)
-                size = px if (i + frame // 10) % 2 == 0 else px // 2
-                self.draw.rectangle([sx - size, sy - size, sx + size, sy + size], fill=(255, 255, 180))
+                sy = y - px * 3 + int(math.sin(angle) * dist * 0.4)
+                # Vary sparkle size
+                sparkle_size = px + int(abs(math.sin(frame * 0.1 + i)) * px)
+                sparkle_color = [(255, 255, 180), (255, 220, 150), (200, 255, 200)][i % 3]
+                if (frame + i * 5) % 20 < 15:
+                    self.draw.rectangle([sx - sparkle_size, sy - sparkle_size,
+                                       sx + sparkle_size, sy + sparkle_size], fill=sparkle_color)
+
+            # Rising thought bubbles
+            for i in range(3):
+                bubble_phase = (frame * 0.2 + i * 12) % 30
+                bubble_x = x + int(math.sin(frame * 0.05 + i * 2) * px * 3)
+                bubble_y = y - px * 4 - int(bubble_phase * px * 0.6)
+                bubble_size = px * (3 - i) // 2
+                if bubble_phase < 25:
+                    # Thought bubble outline
+                    self.draw.ellipse([bubble_x - bubble_size - px, bubble_y - bubble_size - px,
+                                     bubble_x + bubble_size + px, bubble_y + bubble_size + px],
+                                    fill=self.COLORS["outline"])
+                    self.draw.ellipse([bubble_x - bubble_size, bubble_y - bubble_size,
+                                     bubble_x + bubble_size, bubble_y + bubble_size],
+                                    fill=(255, 255, 255))
+
+            # Light beams emanating outward
+            for i in range(4):
+                beam_angle = frame * 0.03 + i * math.pi / 2
+                beam_len = px * 6 + int(math.sin(frame * 0.08 + i) * px * 2)
+                beam_x1 = x + int(math.cos(beam_angle) * px * 2)
+                beam_y1 = y - px * 2 + int(math.sin(beam_angle) * px)
+                beam_x2 = x + int(math.cos(beam_angle) * beam_len)
+                beam_y2 = y - px * 2 + int(math.sin(beam_angle) * beam_len * 0.4)
+                if (frame + i * 8) % 25 < 18:
+                    self.draw.line([(beam_x1, beam_y1), (beam_x2, beam_y2)],
+                                 fill=(255, 255, 200), width=max(1, px // 2))
 
     def _draw_ambient_particles(self, frame: int, phase: str, px: int) -> None:
         """Draw floating ambient particles for a living world feel."""
