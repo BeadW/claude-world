@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -26,12 +27,50 @@ class MovementSystem:
             state: The game state to update.
             dt: Delta time in seconds.
         """
-        # Update main agent
+        # Update main agent with target-based movement
         main = state.main_agent
+        self._update_agent_movement(main, dt)
+
+        # Apply velocity (for any remaining physics-based movement)
         main.position.x += main.velocity.x * dt
         main.position.y += main.velocity.y * dt
         main.velocity.x *= self._friction
         main.velocity.y *= self._friction
+
+    def _update_agent_movement(self, agent, dt: float) -> None:
+        """Update agent movement toward target position."""
+        if not agent.is_walking or agent.target_position is None:
+            return
+
+        # Calculate direction to target
+        dx = agent.target_position.x - agent.position.x
+        dy = agent.target_position.y - agent.position.y
+        distance = math.sqrt(dx * dx + dy * dy)
+
+        # Arrival threshold
+        arrival_distance = 5.0
+
+        if distance <= arrival_distance:
+            # Arrived at destination
+            agent.position.x = agent.target_position.x
+            agent.position.y = agent.target_position.y
+            agent.is_walking = False
+            agent.target_position = None
+        else:
+            # Move toward target
+            move_distance = agent.move_speed * dt
+            if move_distance > distance:
+                move_distance = distance
+
+            # Normalize direction and apply movement
+            agent.position.x += (dx / distance) * move_distance
+            agent.position.y += (dy / distance) * move_distance
+
+            # Update facing direction
+            if dx > 0:
+                agent.facing_direction = 1
+            elif dx < 0:
+                agent.facing_direction = -1
 
         # Update other entities
         for entity in state.entities.values():

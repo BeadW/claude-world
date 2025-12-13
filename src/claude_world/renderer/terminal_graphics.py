@@ -485,6 +485,59 @@ class TerminalGraphicsRenderer:
         # Draw clouds in the sky area
         self._draw_pixel_clouds(frame, state.world.time_of_day.phase)
 
+        # Draw ambient floating particles (leaves during day, fireflies at night)
+        self._draw_ambient_particles(frame, state.world.time_of_day.phase, px)
+
+    def _draw_ambient_particles(self, frame: int, phase: str, px: int) -> None:
+        """Draw floating ambient particles for a living world feel."""
+        import random
+
+        # Use frame-based seed for consistent but animated particles
+        num_particles = 12
+
+        for i in range(num_particles):
+            # Each particle has its own movement pattern
+            random.seed(i * 777)
+            base_x = random.randint(0, self.width)
+            base_y = random.randint(int(self.height * 0.25), int(self.height * 0.85))
+            speed_x = random.uniform(0.3, 0.8)
+            speed_y = random.uniform(0.1, 0.3)
+            phase_offset = random.uniform(0, math.pi * 2)
+
+            # Animate position
+            x = int((base_x + frame * speed_x) % self.width)
+            y = int(base_y + math.sin(frame * 0.05 + phase_offset) * px * 4)
+
+            if phase == "night":
+                # Fireflies - glowing yellow dots that pulse
+                glow = abs(math.sin(frame * 0.1 + i))
+                if glow > 0.5:
+                    brightness = int(150 + glow * 105)
+                    # Glow effect
+                    self.draw.ellipse(
+                        [x - px * 2, y - px * 2, x + px * 2, y + px * 2],
+                        fill=(brightness // 2, brightness // 2, 0)
+                    )
+                    # Core
+                    self.draw.rectangle(
+                        [x - px // 2, y - px // 2, x + px // 2, y + px // 2],
+                        fill=(brightness, brightness, 50)
+                    )
+            else:
+                # Floating leaves/petals during day
+                leaf_color = [(180, 220, 140), (140, 200, 120), (200, 180, 160)][i % 3]
+                # Leaf rotates as it floats
+                angle = frame * 0.08 + i
+                leaf_w = int(px * 1.5)
+                leaf_h = int(px * 0.8)
+                # Simple rotating leaf (just offset the rectangle slightly)
+                offset = int(math.sin(angle) * px)
+                self.draw.rectangle(
+                    [x - leaf_w + offset, y - leaf_h,
+                     x + leaf_w + offset, y + leaf_h],
+                    fill=leaf_color
+                )
+
     def _draw_pixel_tree(self, x: int, y: int, scale: float, px: int, frame: int) -> None:
         """Draw a pixel art tree like in the reference image - round canopy with trunk."""
         # Tree dimensions
@@ -492,8 +545,8 @@ class TerminalGraphicsRenderer:
         trunk_h = int(px * 6 * scale)
         canopy_r = int(px * 8 * scale)
 
-        # Slight sway animation
-        sway = int(math.sin(frame * 0.02 + x * 0.01) * px * 0.5)
+        # More noticeable sway animation - each tree sways at different rate
+        sway = int(math.sin(frame * 0.03 + x * 0.02) * px * 2 * scale)
 
         # Shadow on ground (ellipse)
         shadow_w = int(canopy_r * 1.2)
@@ -594,7 +647,6 @@ class TerminalGraphicsRenderer:
 
     def _render_claude_character(self, state: GameState) -> None:
         """Render Claude as a pixel art character with bold outlines like reference."""
-        base_center_x = self.width // 2
         activity = state.main_agent.activity.value
         frame = self._frame_count
 
@@ -606,29 +658,61 @@ class TerminalGraphicsRenderer:
         char_w = int(px * 14)
         char_h = int(px * 18)
 
-        # Position - center of the grassy area
-        ground_y = int(self.height * 0.58)
-        center_x = base_center_x
+        # Base position from game state - offset from screen center
+        screen_center_x = self.width // 2
+        screen_center_y = int(self.height * 0.58)
 
-        # Idle animations
-        bob = int(math.sin(frame * 0.08) * px)
+        # Apply Claude's position offset from state
+        center_x = screen_center_x + int(state.main_agent.position.x)
+        ground_y = screen_center_y + int(state.main_agent.position.y)
 
-        # Look-around animation
-        look_cycle = (frame % 300) / 300.0
-        if look_cycle < 0.1:
-            look_dir = -1
-        elif look_cycle < 0.5:
-            look_dir = 0
-        elif look_cycle < 0.6:
-            look_dir = 1
+        # Get movement state
+        is_walking = state.main_agent.is_walking
+        facing = state.main_agent.facing_direction
+
+        # Breathing animation - subtle scale pulse
+        breath = 1.0 + math.sin(frame * 0.04) * 0.02
+
+        # Walking animation - leg movement and bob
+        if is_walking:
+            # Faster bob while walking
+            bob = int(math.sin(frame * 0.3) * px * 1.5)
+            # Look in direction of movement
+            look_dir = facing
         else:
-            look_dir = 0
+            # Idle bob - gentle floating motion
+            bob = int(math.sin(frame * 0.08) * px * breath)
 
-        # Activity-specific movement
-        if activity == "thinking":
-            center_x = base_center_x + int(math.sin(frame * 0.02) * px * 3)
-        elif activity == "searching":
-            center_x = base_center_x + int(math.sin(frame * 0.05) * px * 5)
+            # Look-around animation - more natural pattern
+            look_cycle = (frame % 400) / 400.0
+            if look_cycle < 0.08:
+                look_dir = -1  # Look left
+            elif look_cycle < 0.15:
+                look_dir = -1  # Hold left
+            elif look_cycle < 0.25:
+                look_dir = 0   # Center
+            elif look_cycle < 0.55:
+                look_dir = 0   # Hold center (longest)
+            elif look_cycle < 0.63:
+                look_dir = 1   # Look right
+            elif look_cycle < 0.70:
+                look_dir = 1   # Hold right
+            elif look_cycle < 0.80:
+                look_dir = 0   # Back to center
+            else:
+                look_dir = 0   # Hold center
+
+        # Occasional head tilt during thinking
+        head_tilt = 0
+        if activity == "thinking" and not is_walking:
+            head_tilt = int(math.sin(frame * 0.03) * px)
+
+        # Activity-specific movement only when not walking
+        if not is_walking:
+            if activity == "thinking":
+                center_x += int(math.sin(frame * 0.02) * px * 3)
+            elif activity == "searching":
+                center_x += int(math.sin(frame * 0.05) * px * 5)
 
         # Colors
         body_color = self.COLORS["claude_body"]
@@ -650,32 +734,43 @@ class TerminalGraphicsRenderer:
             fill=(60, 120, 50)
         )
 
-        # === FEET (two small blocks) ===
+        # === FEET (two small blocks with walking animation) ===
         foot_w = int(px * 3)
         foot_h = int(px * 3)
         foot_spacing = int(px * 2)
 
+        # Walking animation - alternating foot positions
+        if is_walking:
+            walk_cycle = math.sin(frame * 0.4)
+            left_foot_offset = int(walk_cycle * px * 3)
+            right_foot_offset = int(-walk_cycle * px * 3)
+        else:
+            left_foot_offset = 0
+            right_foot_offset = 0
+
         # Left foot outline + fill
+        left_foot_y = feet_y - left_foot_offset
         self.draw.rectangle(
-            [center_x - foot_spacing - foot_w - px, feet_y - px,
-             center_x - foot_spacing + px, feet_y + foot_h + px],
+            [center_x - foot_spacing - foot_w - px, left_foot_y - px,
+             center_x - foot_spacing + px, left_foot_y + foot_h + px],
             fill=outline
         )
         self.draw.rectangle(
-            [center_x - foot_spacing - foot_w, feet_y,
-             center_x - foot_spacing, feet_y + foot_h],
+            [center_x - foot_spacing - foot_w, left_foot_y,
+             center_x - foot_spacing, left_foot_y + foot_h],
             fill=dark_color
         )
 
         # Right foot outline + fill
+        right_foot_y = feet_y - right_foot_offset
         self.draw.rectangle(
-            [center_x + foot_spacing - px, feet_y - px,
-             center_x + foot_spacing + foot_w + px, feet_y + foot_h + px],
+            [center_x + foot_spacing - px, right_foot_y - px,
+             center_x + foot_spacing + foot_w + px, right_foot_y + foot_h + px],
             fill=outline
         )
         self.draw.rectangle(
-            [center_x + foot_spacing, feet_y,
-             center_x + foot_spacing + foot_w, feet_y + foot_h],
+            [center_x + foot_spacing, right_foot_y,
+             center_x + foot_spacing + foot_w, right_foot_y + foot_h],
             fill=dark_color
         )
 

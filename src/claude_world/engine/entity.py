@@ -18,6 +18,37 @@ from claude_world.types import (
 )
 
 
+# World locations where Claude can go for different activities
+# Positions are relative offsets from center (0, 0)
+# These are thematic for the tropical island world
+WORLD_LOCATIONS = {
+    "center": Position(0, 0),             # Default idle position - the clearing
+    "palm_tree": Position(-70, -15),      # By the palm tree - for reading/resting
+    "rock_pile": Position(75, 25),        # Rock pile - for searching under rocks
+    "sand_patch": Position(-55, 35),      # Sandy area - for digging/building
+    "tide_pool": Position(85, -10),       # By the water - for exploring/fetching
+    "hilltop": Position(0, -50),          # Higher ground - for thinking/planning
+    "shore": Position(-85, 20),           # Beach shore - for communication (messages in bottles)
+    "bushes": Position(60, 45),           # Dense bushes - for searching
+}
+
+# Tool → Location mapping (themed for tropical island)
+TOOL_LOCATION_MAP = {
+    "Read": "palm_tree",          # Reading under a palm tree
+    "Write": "sand_patch",        # Writing in the sand
+    "Edit": "sand_patch",         # Editing marks in the sand
+    "Bash": "rock_pile",          # Bashing rocks together
+    "Glob": "bushes",             # Looking through bushes
+    "Grep": "rock_pile",          # Searching under rocks
+    "WebFetch": "tide_pool",      # Fetching from the tide pool
+    "WebSearch": "tide_pool",     # Searching the waters
+    "Task": "hilltop",            # Thinking on the hilltop
+    "TodoWrite": "sand_patch",    # Planning in the sand
+    "AskUserQuestion": "shore",   # Sending message in a bottle
+    "NotebookEdit": "palm_tree",  # Working under shade
+}
+
+
 # Spawn point offsets for subagents
 SUBAGENT_SPAWN_OFFSETS = [
     (100, 0),
@@ -148,6 +179,37 @@ class EntityManager:
         if tool_name is not None:
             self._state.main_agent.last_tool = tool_name
             self._state.main_agent.last_tool_time = time.time()
+
+            # Move Claude to the appropriate location for this tool
+            self._move_to_tool_location(tool_name)
+        elif activity == AgentActivity.IDLE:
+            # Return to center when idle
+            self._move_to_location("center")
+
+    def _move_to_tool_location(self, tool_name: str) -> None:
+        """Move Claude to the location for a specific tool."""
+        location_name = TOOL_LOCATION_MAP.get(tool_name, "center")
+        self._move_to_location(location_name)
+
+    def _move_to_location(self, location_name: str) -> None:
+        """Set Claude's target position to a named location."""
+        if location_name not in WORLD_LOCATIONS:
+            location_name = "center"
+
+        target = WORLD_LOCATIONS[location_name]
+        agent = self._state.main_agent
+
+        # Only start moving if not already at this location
+        if agent.current_location != location_name:
+            agent.target_position = Position(target.x, target.y)
+            agent.is_walking = True
+            agent.current_location = location_name
+
+            # Set facing direction based on target
+            if target.x > agent.position.x:
+                agent.facing_direction = 1
+            elif target.x < agent.position.x:
+                agent.facing_direction = -1
 
     def update_entity_position(
         self,

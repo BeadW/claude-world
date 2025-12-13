@@ -176,6 +176,13 @@ class AgentEntity(Entity):
     last_tool: Optional[str] = None  # Last tool used (for minimum display time)
     last_tool_time: float = 0.0  # Timestamp when last tool started
 
+    # Movement system
+    target_position: Optional[Position] = None  # Where Claude is walking to
+    move_speed: float = 150.0  # Pixels per second
+    is_walking: bool = False
+    facing_direction: int = 1  # 1 = right, -1 = left
+    current_location: str = "center"  # Named location in the world
+
     def set_activity(self, activity: AgentActivity) -> None:
         """Change activity and update animation."""
         self.activity = activity
@@ -204,6 +211,11 @@ class AgentEntity(Entity):
             current_tool=self.current_tool,
             last_tool=self.last_tool,
             last_tool_time=self.last_tool_time,
+            target_position=self.target_position.copy() if self.target_position else None,
+            move_speed=self.move_speed,
+            is_walking=self.is_walking,
+            facing_direction=self.facing_direction,
+            current_location=self.current_location,
         )
 
 
