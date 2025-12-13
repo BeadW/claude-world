@@ -137,6 +137,15 @@ class GameEngine:
             state = self._entity_manager.get_state()
             state.session_active = False
 
+        elif event_type == "API_USAGE":
+            state = self._entity_manager.get_state()
+            state.resources.api_costs.add_usage(
+                input_tokens=data.get("input_tokens", 0),
+                output_tokens=data.get("output_tokens", 0),
+                cache_read=data.get("cache_read", 0),
+                cache_write=data.get("cache_write", 0),
+            )
+
     def subscribe(self, listener) -> callable:
         """Subscribe to state changes.
 

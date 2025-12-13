@@ -155,4 +155,17 @@ def map_claude_event(event: dict[str, Any]) -> list[dict[str, Any]]:
             "data": {"activity": AgentActivity.THINKING},
         })
 
+    elif event_type == "API_RESPONSE":
+        # API response with token usage information
+        usage = payload.get("usage", {})
+        game_events.append({
+            "type": "API_USAGE",
+            "data": {
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+                "cache_read": usage.get("cache_read_input_tokens", 0),
+                "cache_write": usage.get("cache_creation_input_tokens", 0),
+            },
+        })
+
     return game_events

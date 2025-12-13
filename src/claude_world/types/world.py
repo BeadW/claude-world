@@ -154,6 +154,60 @@ class Camera:
 
 
 @dataclass
+class ApiCostTracker:
+    """Tracks actual API costs from Claude Code usage."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    total_cost_usd: float = 0.0
+
+    # Cost rates per million tokens (Opus 4 pricing)
+    INPUT_COST_PER_M: float = 15.0
+    OUTPUT_COST_PER_M: float = 75.0
+    CACHE_READ_COST_PER_M: float = 1.5
+    CACHE_WRITE_COST_PER_M: float = 18.75
+
+    @property
+    def total_tokens(self) -> int:
+        """Total tokens used."""
+        return self.input_tokens + self.output_tokens
+
+    def add_usage(
+        self,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cache_read: int = 0,
+        cache_write: int = 0,
+    ) -> None:
+        """Add token usage and update cost."""
+        self.input_tokens += input_tokens
+        self.output_tokens += output_tokens
+        self.cache_read_tokens += cache_read
+        self.cache_write_tokens += cache_write
+
+        # Calculate cost
+        cost = (
+            (input_tokens / 1_000_000) * self.INPUT_COST_PER_M
+            + (output_tokens / 1_000_000) * self.OUTPUT_COST_PER_M
+            + (cache_read / 1_000_000) * self.CACHE_READ_COST_PER_M
+            + (cache_write / 1_000_000) * self.CACHE_WRITE_COST_PER_M
+        )
+        self.total_cost_usd += cost
+
+    def copy(self) -> "ApiCostTracker":
+        """Create a copy."""
+        return ApiCostTracker(
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            cache_read_tokens=self.cache_read_tokens,
+            cache_write_tokens=self.cache_write_tokens,
+            total_cost_usd=self.total_cost_usd,
+        )
+
+
+@dataclass
 class Resources:
     """Resources earned through Claude interactions."""
 
@@ -163,6 +217,7 @@ class Resources:
     unlocked_decorations: set[str] = field(default_factory=set)
     unlocked_structures: set[str] = field(default_factory=set)
     unlocked_islands: set[str] = field(default_factory=lambda: {"tropical-island"})
+    api_costs: ApiCostTracker = field(default_factory=ApiCostTracker)
 
     def copy(self) -> "Resources":
         """Create a copy."""
@@ -173,6 +228,7 @@ class Resources:
             unlocked_decorations=self.unlocked_decorations.copy(),
             unlocked_structures=self.unlocked_structures.copy(),
             unlocked_islands=self.unlocked_islands.copy(),
+            api_costs=self.api_costs.copy(),
         )
 
 

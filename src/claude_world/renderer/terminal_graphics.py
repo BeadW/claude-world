@@ -1502,6 +1502,67 @@ class TerminalGraphicsRenderer:
             fill=self.COLORS["ui_text"]
         )
 
+        # === API Cost Tracker (top right corner) ===
+        self._render_api_cost_tracker(state, px, scale)
+
+    def _render_api_cost_tracker(self, state: GameState, px: int, scale: float) -> None:
+        """Render API cost tracking display in top-right corner."""
+        api_costs = state.resources.api_costs
+
+        # Only show if we have any usage
+        if api_costs.total_tokens == 0:
+            return
+
+        # Position in top-right corner
+        margin = int(8 * scale)
+        panel_w = int(100 * scale)
+        panel_h = int(50 * scale)
+        panel_x = self.width - panel_w - margin
+        panel_y = margin
+
+        # Semi-transparent dark background
+        self.draw.rectangle(
+            [panel_x - px, panel_y - px, panel_x + panel_w + px, panel_y + panel_h + px],
+            fill=self.COLORS["outline"]
+        )
+        self.draw.rectangle(
+            [panel_x, panel_y, panel_x + panel_w, panel_y + panel_h],
+            fill=(40, 35, 50)
+        )
+
+        # Cost header
+        cost_text = f"${api_costs.total_cost_usd:.4f}"
+        self.draw.text(
+            (panel_x + px * 2, panel_y + px * 2),
+            cost_text,
+            fill=self.COLORS["accent_primary"]
+        )
+
+        # Token breakdown (compact)
+        tokens_k = api_costs.total_tokens / 1000
+        if tokens_k >= 1000:
+            token_text = f"{tokens_k/1000:.1f}M tok"
+        elif tokens_k >= 1:
+            token_text = f"{tokens_k:.1f}k tok"
+        else:
+            token_text = f"{api_costs.total_tokens} tok"
+
+        self.draw.text(
+            (panel_x + px * 2, panel_y + px * 2 + int(14 * scale)),
+            token_text,
+            fill=(180, 180, 200)
+        )
+
+        # Input/Output split
+        in_k = api_costs.input_tokens / 1000
+        out_k = api_costs.output_tokens / 1000
+        split_text = f"in:{in_k:.0f}k out:{out_k:.0f}k"
+        self.draw.text(
+            (panel_x + px * 2, panel_y + px * 2 + int(26 * scale)),
+            split_text,
+            fill=(140, 140, 160)
+        )
+
     def _render_activity_indicator(self, state: GameState) -> None:
         """Render activity indicator as pixel art banner at top of screen."""
         import time
