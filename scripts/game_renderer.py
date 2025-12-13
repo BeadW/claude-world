@@ -77,7 +77,7 @@ class GameRenderer:
                 "activity": state.main_agent.activity.value,
                 "tools_used": state.progression.total_tools_used,
                 "agents_spawned": state.progression.total_subagents_spawned,
-                "time_of_day": state.world.time_of_day.value,
+                "time_of_day": state.world.time_of_day.phase,
             }
         elif query_type == "skills":
             return {

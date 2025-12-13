@@ -157,17 +157,17 @@ class Camera:
 class ApiCostTracker:
     """Tracks actual API costs from Claude Code usage."""
 
+    # Cost rates per million tokens (Opus 4 pricing) - class constants
+    INPUT_COST_PER_M: float = field(default=15.0, init=False, repr=False)
+    OUTPUT_COST_PER_M: float = field(default=75.0, init=False, repr=False)
+    CACHE_READ_COST_PER_M: float = field(default=1.5, init=False, repr=False)
+    CACHE_WRITE_COST_PER_M: float = field(default=18.75, init=False, repr=False)
+
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
     total_cost_usd: float = 0.0
-
-    # Cost rates per million tokens (Opus 4 pricing)
-    INPUT_COST_PER_M: float = 15.0
-    OUTPUT_COST_PER_M: float = 75.0
-    CACHE_READ_COST_PER_M: float = 1.5
-    CACHE_WRITE_COST_PER_M: float = 18.75
 
     @property
     def total_tokens(self) -> int:

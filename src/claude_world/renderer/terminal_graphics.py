@@ -1345,17 +1345,18 @@ class TerminalGraphicsRenderer:
 
             pos += segment_len
 
-        # Draw energy particles along the line
-        for i in range(3):
-            particle_pos = ((frame * 3 + i * 30) % int(distance))
-            px_pos = int(x1 + nx * particle_pos)
-            py_pos = int(y1 + ny * particle_pos)
-            particle_size = px + int(abs(math.sin(frame * 0.2 + i)) * px)
-            self.draw.ellipse(
-                [px_pos - particle_size, py_pos - particle_size,
-                 px_pos + particle_size, py_pos + particle_size],
-                fill=(200, 255, 255)
-            )
+        # Draw energy particles along the line (only if distance is large enough)
+        if distance > 30:
+            for i in range(3):
+                particle_pos = ((frame * 3 + i * 30) % int(distance))
+                px_pos = int(x1 + nx * particle_pos)
+                py_pos = int(y1 + ny * particle_pos)
+                particle_size = px + int(abs(math.sin(frame * 0.2 + i)) * px)
+                self.draw.ellipse(
+                    [px_pos - particle_size, py_pos - particle_size,
+                     px_pos + particle_size, py_pos + particle_size],
+                    fill=(200, 255, 255)
+                )
 
     def _render_subagents(self, state: GameState) -> None:
         """Render all active subagents."""
