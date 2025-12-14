@@ -8,8 +8,7 @@ import math
 import os
 import shutil
 import sys
-from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import TYPE_CHECKING, Tuple
 
 try:
     from PIL import Image, ImageDraw, ImageFont
@@ -20,45 +19,40 @@ except ImportError:
 if TYPE_CHECKING:
     from claude_world.types import GameState
 
-
-def detect_graphics_protocol() -> str:
-    """Detect which graphics protocol the terminal supports."""
-    term = os.environ.get("TERM", "")
-    term_program = os.environ.get("TERM_PROGRAM", "")
-
-    # When inside tmux, prefer sixel because tmux handles it natively
-    if is_inside_tmux():
-        return "sixel"
-
-    if "kitty" in term.lower():
-        return "kitty"
-    elif term_program == "iTerm.app":
-        return "iterm2"
-    elif "xterm" in term.lower() or "mlterm" in term.lower():
-        return "sixel"
-    else:
-        return "none"
-
-
-def is_inside_tmux() -> bool:
-    """Check if we're running inside tmux."""
-    return "TMUX" in os.environ
-
-
-def tmux_wrap(sequence: str) -> str:
-    """Wrap an escape sequence for tmux passthrough."""
-    if not is_inside_tmux():
-        return sequence
-    escaped = sequence.replace("\033", "\033\033")
-    return f"\033Ptmux;{escaped}\033\\"
+# Import from split modules
+from claude_world.renderer.terminal_size import (
+    is_inside_tmux,
+    get_pane_size,
+    get_terminal_pixel_width,
+    get_terminal_pixel_size,
+    get_cell_size,
+    resize_tmux_pane,
+    get_pane_pixel_size,
+    ASPECT_RATIO,
+)
+from claude_world.renderer.display import (
+    detect_graphics_protocol,
+    tmux_wrap,
+    display_kitty,
+    display_iterm2,
+    display_sixel,
+    clear_tmux_scrollback,
+    enable_focus_reporting as _enable_focus_reporting,
+    disable_focus_reporting as _disable_focus_reporting,
+    cleanup_terminal,
+)
+from claude_world.renderer.world_objects import WorldObjectsMixin
 
 
-class TerminalGraphicsRenderer:
+class TerminalGraphicsRenderer(WorldObjectsMixin):
     """Renders game state as idle game graphics in the terminal.
 
     Design: Centered Claude character with clean stats display.
     Inspired by popular idle games with focus on character and progression.
     """
+
+    # Fixed aspect ratio for game (width:height) - imported from terminal_size
+    ASPECT_RATIO = ASPECT_RATIO
 
     # Color palette - Pixel art style with bold, flat colors
     COLORS = {
@@ -171,15 +165,19 @@ class TerminalGraphicsRenderer:
                 text=True,
             )
             if result.returncode != 0:
+                del result  # Explicitly free subprocess buffers
                 return None
 
-            current_pane = subprocess.run(
+            pane_ids = result.stdout.strip().split("\n")
+            del result  # Free memory immediately
+
+            result2 = subprocess.run(
                 ["tmux", "display-message", "-p", "#{pane_id}"],
                 capture_output=True,
                 text=True,
-            ).stdout.strip()
-
-            pane_ids = result.stdout.strip().split("\n")
+            )
+            current_pane = result2.stdout.strip()
+            del result2  # Free memory immediately
 
             # Check other panes for Claude Code verb
             for pane_id in pane_ids:
@@ -193,9 +191,11 @@ class TerminalGraphicsRenderer:
                     text=True,
                 )
                 if capture.returncode != 0:
+                    del capture
                     continue
 
                 content = capture.stdout
+                del capture  # Free subprocess buffers
 
                 # Look for verb patterns like "Unravelling..." or "⠋ Pondering"
                 # Match: optional spinner + word + "..." or "(esc to interrupt)"
@@ -222,64 +222,22 @@ class TerminalGraphicsRenderer:
     @staticmethod
     def _get_pane_size_static() -> tuple[int, int]:
         """Get the tmux pane size or terminal size in characters."""
-        import subprocess
-        if is_inside_tmux():
-            try:
-                result = subprocess.run(
-                    ["tmux", "display-message", "-p", "#{pane_width} #{pane_height}"],
-                    capture_output=True,
-                    text=True,
-                )
-                if result.returncode == 0:
-                    parts = result.stdout.strip().split()
-                    if len(parts) == 2:
-                        return int(parts[0]), int(parts[1])
-            except Exception:
-                pass
-        return shutil.get_terminal_size()
+        return get_pane_size()
+
 
     @staticmethod
-    def _get_terminal_pixel_size() -> tuple[int, int]:
-        """Get terminal/pane size in pixels."""
-        import fcntl
-        import struct
-        import termios
-        import subprocess
+    def _get_terminal_pixel_width() -> int:
+        """Get terminal/pane width in pixels."""
+        return get_terminal_pixel_width()
 
-        xpixel, ypixel = 0, 0
+    @classmethod
+    def _get_terminal_pixel_size(cls) -> tuple[int, int]:
+        """Get terminal size in pixels for frame size."""
+        return get_terminal_pixel_size()
 
-        # Try ioctl first - this gets the actual pane pixel size in tmux
-        try:
-            # TIOCGWINSZ returns (rows, cols, xpixel, ypixel)
-            result = fcntl.ioctl(sys.stdout.fileno(), termios.TIOCGWINSZ,
-                                b'\x00' * 8)
-            rows, cols, xpixel, ypixel = struct.unpack('HHHH', result)
-        except Exception:
-            pass
-
-        # If ioctl gave us pixel size, use it
-        if xpixel > 0 and ypixel > 0:
-            return xpixel, ypixel
-
-        # Otherwise, get character dimensions and estimate
-        if is_inside_tmux():
-            try:
-                result = subprocess.run(
-                    ["tmux", "display-message", "-p", "#{pane_width} #{pane_height}"],
-                    capture_output=True,
-                    text=True,
-                )
-                if result.returncode == 0:
-                    parts = result.stdout.strip().split()
-                    if len(parts) == 2:
-                        cols, rows = int(parts[0]), int(parts[1])
-            except Exception:
-                cols, rows = shutil.get_terminal_size()
-        else:
-            cols, rows = shutil.get_terminal_size()
-
-        # Estimate pixels - typical cell is ~9x18 pixels
-        return cols * 9, rows * 18
+    def _get_pane_pixel_size(self) -> tuple[int, int]:
+        """Get current tmux pane size in pixels."""
+        return get_pane_pixel_size(self._cell_width, self._cell_height, self.width, self.height)
 
     def __init__(self, width: int = 0, height: int = 0):
         """Initialize the renderer.
@@ -309,6 +267,9 @@ class TerminalGraphicsRenderer:
         self.pane_rows = pane_rows
         self.protocol = detect_graphics_protocol()
 
+        # Store cell size for pane size calculations
+        self._cell_width, self._cell_height = self._get_cell_size()
+
         # Create frame buffer
         self.frame = Image.new("RGBA", (width, height), (0, 0, 0, 255))
         self.draw = ImageDraw.Draw(self.frame)
@@ -330,6 +291,24 @@ class TerminalGraphicsRenderer:
         # Memory management - clear terminal scrollback periodically
         self._last_scrollback_clear = 0
 
+        # Resize tmux pane to match rendered frame
+        self._resize_tmux_pane()
+
+    @staticmethod
+    def _get_cell_size() -> tuple[int, int]:
+        """Get terminal cell size in pixels."""
+        return get_cell_size()
+
+    def _resize_tmux_pane(self) -> None:
+        """Resize the current tmux pane to fit the rendered frame."""
+        resize_tmux_pane(self.height, self._cell_height)
+
+    def _safe_ellipse(self, coords: list, **kwargs) -> None:
+        """Draw an ellipse only if coordinates are valid (x2 > x1 and y2 > y1)."""
+        x1, y1, x2, y2 = coords[0], coords[1], coords[2], coords[3]
+        if x2 > x1 and y2 > y1:
+            self.draw.ellipse(coords, **kwargs)
+
     def render_frame(self, state: GameState) -> None:
         """Render a complete frame."""
         import time
@@ -338,35 +317,45 @@ class TerminalGraphicsRenderer:
 
         self._frame_count += 1
 
+        # Size is fixed at startup - no dynamic resizing to prevent flickering
+
+        # Close previous frame and draw to free memory
+        if hasattr(self, 'draw') and self.draw is not None:
+            del self.draw
+            self.draw = None
+        if hasattr(self, 'frame') and self.frame is not None:
+            self.frame.close()
+            del self.frame
+            self.frame = None
+
+        # Aggressive garbage collection - every 10 frames (~0.3 second at 30fps)
+        # Critical for preventing PIL image memory buildup
+        if self._frame_count % 10 == 0:
+            import gc
+            gc.collect(0)  # Generation 0 only - fast
+        # Full GC every 90 frames (~3 seconds)
+        if self._frame_count % 90 == 0:
+            import gc
+            gc.collect()
+
+        # Create fresh frame
+        self.frame = Image.new("RGBA", (self.width, self.height), (0, 0, 0, 255))
+        self.draw = ImageDraw.Draw(self.frame)
+
         try:
-            # Close previous frame and draw to free memory
-            if hasattr(self, 'draw') and self.draw is not None:
-                del self.draw
-                self.draw = None
-            if hasattr(self, 'frame') and self.frame is not None:
-                self.frame.close()
-                self.frame = None
-
-            # More frequent garbage collection - every 30 frames (~1 second at 30fps)
-            if self._frame_count % 30 == 0:
-                import gc
-                gc.collect()
-
-            # Create fresh frame
-            self.frame = Image.new("RGBA", (self.width, self.height), (0, 0, 0, 255))
-            self.draw = ImageDraw.Draw(self.frame)
-
             # Render layers (idle game style)
             self._render_background(state)
             self._render_scene(state)
             self._render_subagent_connections(state)
             self._render_subagents(state)
             self._render_claude_character(state)
+            self._render_tool_spinner(state)
             self._render_particles(state)
+            self._render_floating_texts(state)
             self._render_stats_panel(state)
             self._render_activity_indicator(state)
-
-            # Output to terminal
+            self._render_achievement_popups(state)
+            self._render_level_up_overlay(state)
             self._display_frame()
         except Exception as e:
             # Log error to file for debugging
@@ -375,7 +364,6 @@ class TerminalGraphicsRenderer:
                 f.write(f"Activity: {state.main_agent.activity.value if state and state.main_agent else 'unknown'}\n")
                 f.write(f"Tool: {state.main_agent.current_tool if state and state.main_agent else 'unknown'}\n")
                 f.write(traceback.format_exc())
-            # Don't re-raise - try to keep running
 
         self.last_render_time = time.perf_counter() - start
 
@@ -440,12 +428,47 @@ class TerminalGraphicsRenderer:
                         fill=self.COLORS["grass_light"]
                     )
 
-        # Water on the edges (like a river or lake border)
-        water_width = int(self.width * 0.12)
+        # Water on the edges (like ocean surrounding the island)
+        water_width = int(self.width * 0.10)
+        beach_width = int(self.width * 0.06)
+
         # Left water
         self.draw.rectangle([0, grass_start_y, water_width, self.height], fill=self.COLORS["water"])
         # Right water
         self.draw.rectangle([self.width - water_width, grass_start_y, self.width, self.height], fill=self.COLORS["water"])
+
+        # Beach sand between water and grass (left side)
+        self.draw.rectangle([water_width, grass_start_y, water_width + beach_width, self.height],
+                          fill=self.COLORS["sand"])
+        # Beach sand (right side)
+        self.draw.rectangle([self.width - water_width - beach_width, grass_start_y,
+                           self.width - water_width, self.height], fill=self.COLORS["sand"])
+
+        # Sandy shore details - darker wet sand near water
+        wet_sand = (210, 185, 130)
+        self.draw.rectangle([water_width, grass_start_y, water_width + px * 3, self.height], fill=wet_sand)
+        self.draw.rectangle([self.width - water_width - px * 3, grass_start_y,
+                           self.width - water_width, self.height], fill=wet_sand)
+
+        # Scattered shells and pebbles on beach
+        import random
+        random.seed(555)
+        shell_colors = [(240, 235, 220), (220, 200, 170), (200, 180, 150)]
+        for _ in range(12):
+            # Left beach shells
+            sx = random.randint(water_width + px * 2, water_width + beach_width - px * 2)
+            sy = random.randint(grass_start_y + px * 4, self.height - px * 4)
+            shell_size = random.randint(1, 2) * px
+            self._safe_ellipse([sx - shell_size, sy - shell_size//2,
+                             sx + shell_size, sy + shell_size//2],
+                            fill=random.choice(shell_colors))
+            # Right beach shells
+            sx = random.randint(self.width - water_width - beach_width + px * 2,
+                               self.width - water_width - px * 2)
+            sy = random.randint(grass_start_y + px * 4, self.height - px * 4)
+            self._safe_ellipse([sx - shell_size, sy - shell_size//2,
+                             sx + shell_size, sy + shell_size//2],
+                            fill=random.choice(shell_colors))
 
         # Water wave animation - horizontal lines
         for wy in range(grass_start_y, self.height, px * 6):
@@ -461,6 +484,18 @@ class TerminalGraphicsRenderer:
                 fill=self.COLORS["water_light"]
             )
 
+        # Foam at waterline (animated)
+        for wy in range(grass_start_y, self.height, px * 8):
+            foam_offset = int(math.sin(frame * 0.08 + wy * 0.03) * px)
+            # Left foam
+            self.draw.ellipse([water_width + foam_offset - px * 2, wy,
+                             water_width + foam_offset + px * 2, wy + px * 3],
+                            fill=(255, 255, 255))
+            # Right foam
+            self.draw.ellipse([self.width - water_width - foam_offset - px * 2, wy,
+                             self.width - water_width - foam_offset + px * 2, wy + px * 3],
+                            fill=(255, 255, 255))
+
         # Draw pixel art trees scattered around (but not in center where Claude is)
         tree_positions = [
             # Left side trees
@@ -472,6 +507,9 @@ class TerminalGraphicsRenderer:
             # Back trees (smaller, behind)
             (0.35, 0.30), (0.50, 0.28), (0.65, 0.32),
         ]
+
+        # Draw clouds FIRST - they're in the background behind trees
+        self._draw_pixel_clouds(frame, state.world.time_of_day.phase)
 
         # Sort by Y position for proper layering
         tree_positions.sort(key=lambda p: p[1])
@@ -494,50 +532,47 @@ class TerminalGraphicsRenderer:
         # Draw interactive world objects at each location
         self._draw_world_objects(center_x, int(self.height * 0.58), px, frame, state)
 
-        # Draw clouds in the sky area
-        self._draw_pixel_clouds(frame, state.world.time_of_day.phase)
-
         # Draw ambient floating particles (leaves during day, fireflies at night)
         self._draw_ambient_particles(frame, state.world.time_of_day.phase, px)
 
     def _draw_world_objects(self, center_x: int, center_y: int, px: int, frame: int, state: GameState) -> None:
-        """Draw interactive objects at world locations."""
+        """Draw interactive objects at world locations - spread across the island."""
         # Get Claude's current location to highlight active objects
         current_loc = state.main_agent.current_location
 
-        # Palm tree reading spot (upper left) - for reading/resting
-        palm_x = center_x - 70
-        palm_y = center_y - 15
+        # Palm tree reading spot (far left) - for reading/resting
+        palm_x = center_x - 140
+        palm_y = center_y - 30
         self._draw_reading_palm(palm_x, palm_y, px, frame, active=(current_loc == "palm_tree"))
 
-        # Rock pile (right side) - for searching/bashing
-        rock_x = center_x + 75
-        rock_y = center_y + 25
+        # Rock pile (far right) - for searching/bashing
+        rock_x = center_x + 130
+        rock_y = center_y + 50
         self._draw_rock_pile(rock_x, rock_y, px, frame, active=(current_loc == "rock_pile"))
 
         # Sandy patch (lower left) - for writing/building
-        sand_x = center_x - 55
-        sand_y = center_y + 35
+        sand_x = center_x - 100
+        sand_y = center_y + 60
         self._draw_sand_patch(sand_x, sand_y, px, frame, active=(current_loc == "sand_patch"))
 
-        # Tide pool (right, near water) - for fetching
-        pool_x = center_x + 85
-        pool_y = center_y - 10
+        # Tide pool (right edge near water) - for fetching
+        pool_x = center_x + 150
+        pool_y = center_y - 20
         self._draw_tide_pool(pool_x, pool_y, px, frame, active=(current_loc == "tide_pool"))
 
         # Bushes (lower right) - for searching
-        bush_x = center_x + 60
-        bush_y = center_y + 45
+        bush_x = center_x + 100
+        bush_y = center_y + 70
         self._draw_bush(bush_x, bush_y, px, frame, active=(current_loc == "bushes"))
 
         # Message bottle at shore (far left)
-        bottle_x = center_x - 85
-        bottle_y = center_y + 20
+        bottle_x = center_x - 150
+        bottle_y = center_y + 30
         self._draw_message_bottle(bottle_x, bottle_y, px, frame, active=(current_loc == "shore"))
 
         # Thinking spot marker on hilltop (upper center)
         hilltop_x = center_x
-        hilltop_y = center_y - 50
+        hilltop_y = center_y - 70
         self._draw_thinking_spot(hilltop_x, hilltop_y, px, frame, active=(current_loc == "hilltop"))
 
     def _draw_reading_palm(self, x: int, y: int, px: int, frame: int, active: bool = False) -> None:
@@ -631,254 +666,452 @@ class TerminalGraphicsRenderer:
                                        sparkle_x + px//2, sparkle_y + px//2], fill=(255, 255, 200))
 
     def _draw_rock_pile(self, x: int, y: int, px: int, frame: int, active: bool = False) -> None:
-        """Draw a pile of rocks."""
-        rock_colors = [(140, 140, 130), (120, 115, 110), (160, 155, 150)]
+        """Draw a pile of rocks with better depth and detail."""
+        # Rock color palette with proper highlights and shadows
+        rock_base = [(130, 125, 120), (115, 110, 105), (145, 140, 135), (100, 95, 90)]
+        rock_highlight = [(170, 165, 160), (155, 150, 145), (180, 175, 170), (140, 135, 130)]
+        rock_shadow = [(90, 85, 80), (75, 70, 65), (100, 95, 90), (60, 55, 50)]
         outline = self.COLORS["outline"]
 
         # When active, rocks shake
         shake = int(math.sin(frame * 0.4) * px) if active else 0
 
-        # Draw 3 rocks in a pile
-        rocks = [(-px*3, 0, px*4), (px*2, -px, px*3), (0, -px*2, px*3)]
-        for i, (ox, oy, size) in enumerate(rocks):
+        # Ground shadow under pile
+        shadow_color = (60, 100, 50) if not active else (80, 120, 70)
+        self.draw.ellipse([x - px*8, y + px*2, x + px*8, y + px*5], fill=shadow_color)
+
+        # Draw 5 rocks in a pile (back to front for proper layering)
+        rocks = [
+            # (x_offset, y_offset, width, height, color_idx)
+            (-px*4, -px*3, px*5, px*4, 0),   # Back left
+            (px*3, -px*2, px*4, px*3, 1),    # Back right
+            (-px*2, px*1, px*6, px*4, 2),    # Front left (large)
+            (px*4, px*2, px*5, px*3, 3),     # Front right
+            (px*1, -px*4, px*4, px*3, 0),    # Top center
+        ]
+
+        for i, (ox, oy, w, h, ci) in enumerate(rocks):
             # Add individual rock shake when active
             rock_shake = int(math.sin(frame * 0.5 + i * 1.5) * px) if active else 0
             rx, ry = x + ox + shake, y + oy + rock_shake
-            # Outline
-            self.draw.ellipse([rx - size - px, ry - size//2 - px, rx + size + px, ry + size//2 + px], fill=outline)
-            # Rock
-            color = rock_colors[i % len(rock_colors)]
+
+            base = rock_base[ci]
+            highlight = rock_highlight[ci]
+            shadow = rock_shadow[ci]
+
             if active:
                 # Brighten when active
-                color = tuple(min(255, c + 30) for c in color)
-            self.draw.ellipse([rx - size, ry - size//2, rx + size, ry + size//2], fill=color)
+                base = tuple(min(255, c + 25) for c in base)
+                highlight = tuple(min(255, c + 25) for c in highlight)
+
+            # Outline
+            self.draw.ellipse([rx - w - px, ry - h - px, rx + w + px, ry + h + px], fill=outline)
+            # Main rock body
+            self.draw.ellipse([rx - w, ry - h, rx + w, ry + h], fill=base)
+            # Highlight on top-left
+            self.draw.ellipse([rx - w + px, ry - h + px, rx - px, ry - px], fill=highlight)
+            # Shadow on bottom-right
+            self.draw.ellipse([rx + px, ry + px, rx + w - px, ry + h - px], fill=shadow)
+
+        # Small pebbles around the base
+        pebble_positions = [(-px*7, px*3), (px*7, px*4), (-px*5, px*4), (px*6, px*3)]
+        for i, (px_off, py_off) in enumerate(pebble_positions):
+            peb_x, peb_y = x + px_off + shake, y + py_off
+            peb_size = px + (i % 2)
+            self._safe_ellipse([peb_x - peb_size, peb_y - peb_size//2,
+                             peb_x + peb_size, peb_y + peb_size//2], fill=rock_base[i % 4])
 
         # When active, show sparks and dust particles
         if active:
             # Sparks flying upward
-            for i in range(4):
-                spark_x = x + int(math.sin(frame * 0.25 + i * 1.5) * px * 5)
-                spark_y = y - px * 4 - int((frame * 2 + i * 8) % (px * 8))
+            for i in range(5):
+                spark_x = x + int(math.sin(frame * 0.25 + i * 1.2) * px * 6)
+                spark_y = y - px * 5 - int((frame * 2 + i * 7) % (px * 10))
                 spark_size = px if (frame + i) % 3 == 0 else px // 2
+                spark_color = (255, 220, 100) if i % 2 == 0 else (255, 180, 80)
                 self.draw.rectangle([spark_x - spark_size, spark_y - spark_size,
-                                   spark_x + spark_size, spark_y + spark_size], fill=(255, 220, 100))
+                                   spark_x + spark_size, spark_y + spark_size], fill=spark_color)
 
             # Dust puffs
-            for i in range(2):
-                dust_x = x + int(math.cos(frame * 0.1 + i * 3) * px * 6)
-                dust_y = y + px * 2 + int(math.sin(frame * 0.08 + i) * px)
-                dust_size = px * 2 + int(abs(math.sin(frame * 0.1 + i)) * px)
+            for i in range(3):
+                dust_x = x + int(math.cos(frame * 0.12 + i * 2.5) * px * 7)
+                dust_y = y + px * 3 + int(math.sin(frame * 0.08 + i) * px)
+                dust_size = px * 2 + int(abs(math.sin(frame * 0.1 + i)) * px * 1.5)
+                dust_color = (180, 170, 160) if i % 2 == 0 else (160, 150, 140)
                 self.draw.ellipse([dust_x - dust_size, dust_y - dust_size,
-                                 dust_x + dust_size, dust_y + dust_size], fill=(180, 170, 160))
+                                 dust_x + dust_size, dust_y + dust_size], fill=dust_color)
 
     def _draw_sand_patch(self, x: int, y: int, px: int, frame: int, active: bool = False) -> None:
-        """Draw a sandy area with writing marks."""
+        """Draw a sandy dig spot with shovel and writing/building area."""
         sand_color = (230, 210, 170)
         sand_dark = (200, 180, 140)
         sand_light = (245, 230, 195)
+        outline = self.COLORS["outline"]
+        wood_color = (140, 100, 60)
+        metal_color = (180, 180, 190)
 
-        # Sandy area - base
-        self.draw.ellipse([x - px*6, y - px*3, x + px*6, y + px*3], fill=sand_color)
-        self.draw.ellipse([x - px*4, y - px*2, x + px*4, y + px*2], fill=sand_dark)
+        # Ground shadow
+        self.draw.ellipse([x - px*10, y + px*3, x + px*10, y + px*5], fill=(60, 100, 50))
 
-        # When active, show writing animation
+        # Sandy area - larger base
+        self.draw.ellipse([x - px*8 - px, y - px*4 - px, x + px*8 + px, y + px*4 + px], fill=outline)
+        self.draw.ellipse([x - px*8, y - px*4, x + px*8, y + px*4], fill=sand_color)
+        self.draw.ellipse([x - px*5, y - px*2, x + px*5, y + px*2], fill=sand_light)
+
+        # Small sand mound (dug up pile)
+        self.draw.ellipse([x + px*4, y - px*3, x + px*7, y - px], fill=sand_dark)
+        self.draw.ellipse([x + px*5, y - px*3, x + px*6, y - px*2], fill=sand_color)
+
+        # Shovel stuck in sand (shows this is for digging/building)
+        shovel_x = x - px * 5
+        shovel_bob = int(math.sin(frame * 0.1) * px * 0.5) if active else 0
+
+        # Shovel handle
+        self.draw.rectangle([shovel_x - px, y - px*10 + shovel_bob, shovel_x + px, y - px*2 + shovel_bob], fill=outline)
+        self.draw.rectangle([shovel_x - px//2, y - px*10 + shovel_bob, shovel_x + px//2, y - px*2 + shovel_bob], fill=wood_color)
+
+        # Shovel blade
+        self.draw.polygon([
+            (shovel_x - px*2, y - px*2 + shovel_bob),
+            (shovel_x + px*2, y - px*2 + shovel_bob),
+            (shovel_x + px, y + px + shovel_bob),
+            (shovel_x - px, y + px + shovel_bob)
+        ], fill=outline)
+        self.draw.polygon([
+            (shovel_x - px*1.5, y - px*1.5 + shovel_bob),
+            (shovel_x + px*1.5, y - px*1.5 + shovel_bob),
+            (shovel_x + px*0.5, y + shovel_bob),
+            (shovel_x - px*0.5, y + shovel_bob)
+        ], fill=metal_color)
+
+        # Writing stick/twig next to dig area
+        stick_x = x + px * 2
+        self.draw.line([(stick_x, y - px*2), (stick_x + px*3, y + px)], fill=wood_color, width=max(1, px))
+
+        # When active, show writing/digging animation
         if active:
-            # Highlight the active writing area
-            glow_size = px * 5 + int(math.sin(frame * 0.1) * px)
-            self.draw.ellipse([x - glow_size, y - glow_size//2 - px,
+            # Glowing active area
+            glow_size = px * 6 + int(math.sin(frame * 0.1) * px)
+            self._safe_ellipse([x - glow_size, y - glow_size//2 - px,
                              x + glow_size, y + glow_size//2], fill=sand_light)
 
-            # Animated writing marks appearing one by one
+            # Animated writing marks in the sand
             write_cycle = frame % 120
-            num_marks = min((write_cycle // 20) + 1, 6)
+            num_marks = min((write_cycle // 15) + 1, 8)
 
             for i in range(num_marks):
-                # Different stroke patterns
-                mx = x - px*4 + (i % 3) * px * 3
-                my = y - px * 2 + (i // 3) * px * 2
+                mx = x - px*3 + (i % 4) * px * 2
+                my = y - px * 2 + (i // 4) * px * 2
 
-                # Animate the latest mark being drawn
                 if i == num_marks - 1:
-                    progress = (write_cycle % 20) / 20.0
+                    progress = (write_cycle % 15) / 15.0
                     stroke_len = int(px * 2 * progress)
                 else:
                     stroke_len = px * 2
 
-                if i % 2 == 0:
-                    # Horizontal strokes
-                    self.draw.line([(mx, my), (mx + stroke_len, my)],
-                                 fill=(160, 140, 100), width=max(1, px//2))
+                stroke_color = (160, 140, 100)
+                if i % 3 == 0:
+                    self.draw.line([(mx, my), (mx + stroke_len, my)], fill=stroke_color, width=max(1, px//2))
+                elif i % 3 == 1:
+                    self.draw.line([(mx, my), (mx + stroke_len, my + stroke_len//2)], fill=stroke_color, width=max(1, px//2))
                 else:
-                    # Diagonal strokes
-                    self.draw.line([(mx, my), (mx + stroke_len, my + stroke_len//2)],
-                                 fill=(160, 140, 100), width=max(1, px//2))
+                    self.draw.arc([mx, my - px, mx + stroke_len + px, my + px], 0, 180, fill=stroke_color, width=max(1, px//2))
 
-            # Sand grains flying up from writing
-            for i in range(3):
-                grain_x = x + int(math.sin(frame * 0.3 + i * 2) * px * 3)
-                grain_y = y - px * 2 - int((frame + i * 5) % 10) * px // 2
-                self.draw.rectangle([grain_x, grain_y, grain_x + px, grain_y + px], fill=sand_color)
+            # Sand flying up from digging
+            for i in range(4):
+                grain_x = x + int(math.sin(frame * 0.3 + i * 1.5) * px * 4)
+                grain_y = y - px * 3 - int((frame * 1.5 + i * 6) % 12) * px // 2
+                grain_size = px if i % 2 == 0 else px // 2
+                self.draw.rectangle([grain_x, grain_y, grain_x + grain_size, grain_y + grain_size], fill=sand_color)
 
     def _draw_tide_pool(self, x: int, y: int, px: int, frame: int, active: bool = False) -> None:
-        """Draw a small tide pool."""
-        water_color = (100, 180, 220)
-        water_light = (140, 200, 240)
-        water_deep = (70, 150, 200)
+        """Draw a magical scrying pool for web fetching/searching."""
+        water_color = (80, 140, 200)
+        water_light = (120, 180, 230)
+        water_deep = (50, 100, 160)
         outline = self.COLORS["outline"]
+        stone_color = (140, 135, 130)
+        stone_light = (170, 165, 160)
+        magic_glow = (180, 220, 255)
 
-        # Pool outline and fill
-        self.draw.ellipse([x - px*5 - px, y - px*3 - px, x + px*5 + px, y + px*3 + px], fill=outline)
-        self.draw.ellipse([x - px*5, y - px*3, x + px*5, y + px*3], fill=water_color)
+        # Ground shadow
+        self.draw.ellipse([x - px*8, y + px*3, x + px*8, y + px*5], fill=(60, 100, 50))
 
-        # Animated ripples - expand outward
-        ripple_phase = (frame * 0.08) % (math.pi * 2)
-        ripple_size = int(px * 2 + math.sin(ripple_phase) * px)
-        self.draw.ellipse([x - ripple_size, y - ripple_size//2,
-                         x + ripple_size, y + ripple_size//2], fill=water_light)
+        # Stone rim around pool (makes it look intentional, not just a puddle)
+        self.draw.ellipse([x - px*7 - px, y - px*4 - px, x + px*7 + px, y + px*4 + px], fill=outline)
+        self.draw.ellipse([x - px*7, y - px*4, x + px*7, y + px*4], fill=stone_color)
+        self.draw.ellipse([x - px*6, y - px*3, x + px*4, y + px*3], fill=stone_light)
 
-        # When active, show fetching animation
+        # Pool water inside stone rim
+        self.draw.ellipse([x - px*5, y - px*3, x + px*5, y + px*3], fill=water_deep)
+        self.draw.ellipse([x - px*4, y - px*2, x + px*4, y + px*2], fill=water_color)
+
+        # Magical sparkles on surface (shows it's for searching/fetching)
+        for i in range(4):
+            sparkle_phase = (frame * 0.1 + i * 1.5) % (math.pi * 2)
+            sparkle_x = x + int(math.cos(sparkle_phase + i) * px * 3)
+            sparkle_y = y + int(math.sin(sparkle_phase + i) * px * 1.5)
+            if (frame + i * 7) % 20 < 12:
+                self.draw.rectangle([sparkle_x - px//2, sparkle_y - px//2,
+                                   sparkle_x + px//2, sparkle_y + px//2], fill=magic_glow)
+
+        # Magnifying glass icon floating above (shows it's for searching)
+        glass_bob = int(math.sin(frame * 0.06) * px)
+        glass_x = x + px * 3
+        glass_y = y - px * 6 + glass_bob
+        # Glass lens (circle)
+        self.draw.ellipse([glass_x - px*2 - px, glass_y - px*2 - px,
+                         glass_x + px*2 + px, glass_y + px*2 + px], fill=outline)
+        self.draw.ellipse([glass_x - px*2, glass_y - px*2,
+                         glass_x + px*2, glass_y + px*2], fill=water_light)
+        # Glass handle
+        handle_start_x = glass_x + px * 2
+        handle_start_y = glass_y + px * 2
+        self.draw.line([(handle_start_x, handle_start_y),
+                       (handle_start_x + px * 2, handle_start_y + px * 2)],
+                      fill=outline, width=max(2, px))
+
+        # When active, show fetching/searching animation
         if active:
             # Glowing center - something being retrieved
             glow_pulse = abs(math.sin(frame * 0.15))
-            glow_color = (int(140 + 60 * glow_pulse), int(200 + 40 * glow_pulse), int(240 + 15 * glow_pulse))
-            glow_size = int(px * 2 + glow_pulse * px * 2)
-            self.draw.ellipse([x - glow_size, y - glow_size,
-                             x + glow_size, y + glow_size], fill=glow_color)
+            glow_color = (int(140 + 80 * glow_pulse), int(200 + 50 * glow_pulse), int(255))
+            glow_size = int(px * 3 + glow_pulse * px * 2)
+            self._safe_ellipse([x - glow_size, y - glow_size//2,
+                             x + glow_size, y + glow_size//2], fill=glow_color)
 
-            # Rising bubbles stream
-            for i in range(4):
-                bubble_phase = (frame * 0.4 + i * 15) % 30
-                bx = x + int(math.sin(frame * 0.2 + i * 1.5) * px * 3)
-                by = y - int(bubble_phase * px * 0.5)
-                bubble_size = px if bubble_phase < 20 else px // 2
-                if bubble_phase < 25:
-                    self.draw.ellipse([bx - bubble_size, by - bubble_size,
-                                     bx + bubble_size, by + bubble_size], fill=water_light)
+            # Data/information rising from pool
+            for i in range(5):
+                data_phase = (frame * 0.5 + i * 8) % 25
+                dx = x + int(math.sin(frame * 0.15 + i * 1.2) * px * 4)
+                dy = y - px * 2 - int(data_phase * px * 0.6)
+                if data_phase < 20:
+                    # Small rectangles representing data
+                    data_w = px * (2 if i % 2 == 0 else 1)
+                    data_h = px
+                    self.draw.rectangle([dx - data_w//2, dy - data_h//2,
+                                       dx + data_w//2, dy + data_h//2], fill=magic_glow)
 
             # Ripple rings expanding outward
-            for i in range(2):
-                ring_phase = (frame * 0.1 + i * 1.5) % 3.0
+            for i in range(3):
+                ring_phase = (frame * 0.12 + i * 1.2) % 3.0
                 ring_size = int(px * 2 + ring_phase * px * 2)
                 ring_alpha = 1.0 - (ring_phase / 3.0)
                 if ring_alpha > 0.2:
-                    self.draw.ellipse([x - ring_size, y - ring_size//2,
+                    self._safe_ellipse([x - ring_size, y - ring_size//2,
                                      x + ring_size, y + ring_size//2],
-                                    outline=water_light, width=max(1, int(px * ring_alpha)))
+                                    outline=magic_glow, width=max(1, int(px * ring_alpha * 1.5)))
 
     def _draw_bush(self, x: int, y: int, px: int, frame: int, active: bool = False) -> None:
-        """Draw bushes for searching."""
-        bush_color = (80, 140, 70)
-        bush_light = (100, 170, 90)
-        bush_dark = (60, 110, 50)
+        """Draw bushes for searching with berries and depth."""
+        bush_color = (75, 135, 65)
+        bush_light = (95, 165, 85)
+        bush_mid = (85, 150, 75)
+        bush_dark = (55, 105, 45)
         outline = self.COLORS["outline"]
+        berry_red = (200, 60, 70)
+        berry_dark = (150, 40, 50)
+
+        # Ground shadow
+        shadow_color = (60, 100, 50) if not active else (80, 120, 70)
+        self.draw.ellipse([x - px*8, y + px*3, x + px*8, y + px*5], fill=shadow_color)
 
         # When active, bushes shake more dramatically
         base_rustle = int(math.sin(frame * 0.5) * px * 2) if active else 0
 
-        # Multiple bush blobs
-        blobs = [(-px*2, 0), (px*2, -px), (0, px)]
-        for i, (ox, oy) in enumerate(blobs):
+        # Multiple bush blobs arranged for depth
+        blobs = [
+            # (x_off, y_off, width, height, color)
+            (-px*4, px*1, px*4, px*3, bush_dark),   # Back left
+            (px*3, -px*1, px*4, px*3, bush_dark),   # Back right
+            (-px*1, -px*2, px*5, px*4, bush_mid),   # Back center
+            (-px*3, px*2, px*5, px*3, bush_color),  # Front left
+            (px*2, px*2, px*5, px*3, bush_color),   # Front right
+            (0, px*1, px*4, px*3, bush_light),      # Front center highlight
+        ]
+
+        for i, (ox, oy, w, h, color) in enumerate(blobs):
             # Individual rustle for each blob
             blob_rustle = int(math.sin(frame * 0.6 + i * 1.2) * px) if active else 0
             bx, by = x + ox + base_rustle + blob_rustle, y + oy
-            self.draw.ellipse([bx - px*3 - px, by - px*2 - px, bx + px*3 + px, by + px*2 + px], fill=outline)
-            self.draw.ellipse([bx - px*3, by - px*2, bx + px*3, by + px*2], fill=bush_color)
-            self.draw.ellipse([bx - px*2, by - px*2, bx + px, by], fill=bush_light)
+            # Outline
+            self.draw.ellipse([bx - w - px, by - h - px, bx + w + px, by + h + px], fill=outline)
+            # Bush body
+            self.draw.ellipse([bx - w, by - h, bx + w, by + h], fill=color)
+            # Small highlight blob
+            if i >= 3:  # Only on front bushes
+                self._safe_ellipse([bx - w//2, by - h + px, bx, by - px], fill=bush_light)
+
+        # Add berries scattered on the bush
+        berry_positions = [(-px*3, 0), (px*2, px), (-px, -px*2), (px*4, -px), (-px*5, px*2)]
+        for i, (bx_off, by_off) in enumerate(berry_positions):
+            # Berry sway with bush
+            berry_rustle = int(math.sin(frame * 0.6 + i * 0.8) * px * 0.5) if active else 0
+            bx, by = x + bx_off + base_rustle + berry_rustle, y + by_off
+            # Berry with highlight
+            self.draw.ellipse([bx - px, by - px, bx + px, by + px], fill=berry_red)
+            self._safe_ellipse([bx - px//2, by - px//2, bx, by], fill=(255, 100, 110))
 
         # When active, show leaves flying out and a peek effect
         if active:
             # Leaves flying out from searching
-            for i in range(4):
-                leaf_phase = (frame * 0.3 + i * 8) % 20
-                leaf_x = x + int(math.cos(frame * 0.2 + i * 1.5) * (px * 3 + leaf_phase * px * 0.5))
-                leaf_y = y - px * 2 - int(leaf_phase * px * 0.4)
+            for i in range(5):
+                leaf_phase = (frame * 0.3 + i * 7) % 25
+                leaf_x = x + int(math.cos(frame * 0.2 + i * 1.3) * (px * 4 + leaf_phase * px * 0.6))
+                leaf_y = y - px * 3 - int(leaf_phase * px * 0.5)
                 leaf_color = bush_light if i % 2 == 0 else bush_color
-                if leaf_phase < 15:
-                    self.draw.rectangle([leaf_x - px, leaf_y - px, leaf_x + px, leaf_y + px], fill=leaf_color)
+                if leaf_phase < 18:
+                    self._safe_ellipse([leaf_x - px, leaf_y - px//2, leaf_x + px, leaf_y + px//2], fill=leaf_color)
 
             # Parting effect - darker gap in center showing Claude is looking inside
             gap_x = x + int(math.sin(frame * 0.1) * px)
             self.draw.ellipse([gap_x - px*2, y - px*2, gap_x + px*2, y + px], fill=bush_dark)
 
-            # Question marks or search particles
-            for i in range(2):
-                search_x = x + int(math.sin(frame * 0.15 + i * 3) * px * 4)
-                search_y = y - px * 4 - int(abs(math.sin(frame * 0.2 + i)) * px * 2)
-                self.draw.ellipse([search_x - px, search_y - px, search_x + px, search_y + px],
-                                fill=(255, 255, 200))
+            # Sparkle/search particles rising up
+            for i in range(3):
+                search_x = x + int(math.sin(frame * 0.15 + i * 2.5) * px * 5)
+                search_y = y - px * 5 - int((frame * 0.8 + i * 6) % (px * 8))
+                search_size = px if (frame + i * 3) % 5 < 3 else px // 2
+                self.draw.rectangle([search_x - search_size, search_y - search_size,
+                                   search_x + search_size, search_y + search_size], fill=(255, 255, 200))
 
     def _draw_message_bottle(self, x: int, y: int, px: int, frame: int, active: bool = False) -> None:
-        """Draw a message in a bottle."""
-        bottle_color = (180, 220, 200)
-        bottle_light = (200, 240, 220)
-        cork_color = (160, 120, 80)
-        paper_color = (255, 250, 230)
+        """Draw a beach mailbox/message station for asking questions."""
         outline = self.COLORS["outline"]
+        wood_color = (140, 100, 60)
+        wood_dark = (100, 70, 40)
+        wood_light = (180, 140, 100)
+        paper_color = (255, 250, 230)
+        sand_color = self.COLORS["sand"]
 
-        # When active, the bottle rocks back and forth
-        rock = int(math.sin(frame * 0.15) * px) if active else 0
+        # Ground shadow
+        self.draw.ellipse([x - px*6, y + px*3, x + px*6, y + px*5], fill=(60, 100, 50))
 
-        # Bottle body
-        self.draw.ellipse([x - px*2 - px + rock, y - px*3 - px, x + px*2 + px + rock, y + px*2 + px], fill=outline)
-        self.draw.ellipse([x - px*2 + rock, y - px*3, x + px*2 + rock, y + px*2], fill=bottle_color)
+        # Sandy base patch (this is on the beach)
+        self.draw.ellipse([x - px*5, y + px, x + px*5, y + px*4], fill=sand_color)
 
-        # Glass shine
-        self.draw.ellipse([x - px + rock, y - px*2, x + rock, y - px], fill=bottle_light)
+        # Wooden post holding mailbox
+        self.draw.rectangle([x - px - px, y - px*8, x + px + px, y + px*2], fill=outline)
+        self.draw.rectangle([x - px, y - px*8, x + px, y + px*2], fill=wood_color)
+        self.draw.rectangle([x - px//2, y - px*8, x, y + px*2], fill=wood_dark)
 
-        # Neck
-        self.draw.rectangle([x - px + rock, y - px*4, x + px + rock, y - px*2], fill=bottle_color)
+        # Mailbox body on top of post
+        mailbox_y = y - px * 10
+        # Mailbox back
+        self.draw.rectangle([x - px*4 - px, mailbox_y - px*2 - px, x + px*4 + px, mailbox_y + px*2 + px], fill=outline)
+        self.draw.rectangle([x - px*4, mailbox_y - px*2, x + px*4, mailbox_y + px*2], fill=wood_color)
+        self.draw.rectangle([x - px*4, mailbox_y - px*2, x - px*2, mailbox_y + px*2], fill=wood_light)
+        # Mailbox opening
+        self.draw.rectangle([x - px*2, mailbox_y - px, x + px*2, mailbox_y + px], fill=wood_dark)
 
-        # Cork (pops off when active)
-        cork_y = y - px*5 - (int(math.sin(frame * 0.2) * px * 2) if active else 0)
-        self.draw.rectangle([x - px + rock, cork_y, x + px + rock, cork_y + px], fill=cork_color)
-
-        # When active, show message being written/sent
+        # Flag on mailbox (up when active = asking question)
+        flag_color = (200, 50, 50) if active else (150, 40, 40)
+        flag_x = x + px * 4
+        flag_y = mailbox_y - px * 2
+        # Flag pole
+        self.draw.rectangle([flag_x, flag_y, flag_x + px, mailbox_y + px*2], fill=outline)
+        # Flag (raised when active)
         if active:
-            # Pulsing glow around bottle
+            flag_bob = int(math.sin(frame * 0.2) * px * 0.5)
+            self.draw.rectangle([flag_x + px, flag_y - px*2 + flag_bob, flag_x + px*4, flag_y + px + flag_bob], fill=flag_color)
+        else:
+            self.draw.rectangle([flag_x + px, mailbox_y, flag_x + px*4, mailbox_y + px*3], fill=flag_color)
+
+        # Question mark icon floating nearby
+        qmark_bob = int(math.sin(frame * 0.06) * px)
+        qmark_x = x - px * 5
+        qmark_y = y - px * 12 + qmark_bob
+        # Question mark bubble
+        self.draw.ellipse([qmark_x - px*2 - px, qmark_y - px*2 - px, qmark_x + px*2 + px, qmark_y + px*2 + px], fill=outline)
+        self.draw.ellipse([qmark_x - px*2, qmark_y - px*2, qmark_x + px*2, qmark_y + px*2], fill=(255, 255, 255))
+        # "?" character (simplified)
+        self.draw.arc([qmark_x - px, qmark_y - px*1.5, qmark_x + px, qmark_y + px*0.5], 180, 0, fill=(80, 80, 80), width=max(1, px))
+        self._safe_ellipse([qmark_x - px//2, qmark_y + px//2, qmark_x + px//2, qmark_y + px], fill=(80, 80, 80))
+
+        # When active, show message being sent
+        if active:
+            # Glowing mailbox
             glow = abs(math.sin(frame * 0.12))
-            glow_size = int(px * 4 + glow * px * 3)
             glow_color = (255, 255, 200)
-            self.draw.ellipse([x - glow_size, y - glow_size - px*2,
-                             x + glow_size, y + glow_size], fill=glow_color)
-            # Redraw bottle on top of glow
-            self.draw.ellipse([x - px*2 + rock, y - px*3, x + px*2 + rock, y + px*2], fill=bottle_color)
-            self.draw.rectangle([x - px + rock, y - px*4, x + px + rock, y - px*2], fill=bottle_color)
+            self.draw.ellipse([x - px*5, mailbox_y - px*3, x + px*5, mailbox_y + px*3], fill=glow_color)
+            # Redraw mailbox on glow
+            self.draw.rectangle([x - px*4, mailbox_y - px*2, x + px*4, mailbox_y + px*2], fill=wood_color)
 
-            # Paper/message floating out
-            paper_phase = (frame * 0.15) % (math.pi * 2)
-            paper_y_offset = int(math.sin(paper_phase) * px * 2)
-            paper_x = x + rock + int(math.cos(paper_phase) * px)
-            paper_y = y - px * 6 - paper_y_offset - int(abs(math.sin(frame * 0.1)) * px * 3)
-            self.draw.rectangle([paper_x - px, paper_y - px, paper_x + px*2, paper_y + px], fill=paper_color)
-            # Writing on paper
-            self.draw.line([(paper_x - px + 1, paper_y), (paper_x + px, paper_y)], fill=(100, 100, 100))
-
-            # Sparkles around message
+            # Letters/envelopes floating out
             for i in range(3):
-                sparkle_angle = frame * 0.1 + i * 2.1
-                sparkle_x = x + int(math.cos(sparkle_angle) * px * 5)
-                sparkle_y = y - px * 4 + int(math.sin(sparkle_angle) * px * 3)
-                if (frame + i * 7) % 15 < 10:
-                    self.draw.rectangle([sparkle_x, sparkle_y, sparkle_x + px, sparkle_y + px],
-                                       fill=(255, 255, 150))
+                letter_phase = (frame * 0.3 + i * 10) % 30
+                lx = x + int(math.sin(frame * 0.1 + i * 2) * px * 4)
+                ly = mailbox_y - px * 2 - int(letter_phase * px * 0.5)
+                if letter_phase < 25:
+                    # Envelope
+                    self.draw.rectangle([lx - px*2, ly - px, lx + px*2, ly + px], fill=paper_color)
+                    # Envelope flap
+                    self.draw.polygon([(lx - px*2, ly - px), (lx, ly), (lx + px*2, ly - px)], fill=(230, 220, 200))
+
+            # Sparkles
+            for i in range(4):
+                sparkle_angle = frame * 0.1 + i * 1.5
+                sparkle_x = x + int(math.cos(sparkle_angle) * px * 6)
+                sparkle_y = mailbox_y + int(math.sin(sparkle_angle) * px * 4)
+                if (frame + i * 6) % 15 < 10:
+                    self.draw.rectangle([sparkle_x - px//2, sparkle_y - px//2,
+                                       sparkle_x + px//2, sparkle_y + px//2], fill=(255, 255, 150))
 
     def _draw_thinking_spot(self, x: int, y: int, px: int, frame: int, active: bool = False) -> None:
-        """Draw a thinking spot marker on the hilltop."""
-        # Small raised mound
-        mound_color = (140, 180, 120)
-        mound_light = (160, 200, 140)
-        self.draw.ellipse([x - px*4, y - px, x + px*4, y + px*2], fill=mound_color)
-        self.draw.ellipse([x - px*2, y - px, x + px*2, y + px], fill=mound_light)
+        """Draw a meditation stone/thinking pedestal on the hilltop."""
+        outline = self.COLORS["outline"]
+        stone_base = (160, 155, 150)
+        stone_light = (190, 185, 180)
+        stone_dark = (120, 115, 110)
+
+        # Ground shadow
+        self.draw.ellipse([x - px*6, y + px*2, x + px*6, y + px*4], fill=(60, 100, 50))
+
+        # Stone pedestal base (wide flat stone)
+        self.draw.ellipse([x - px*5 - px, y - px, x + px*5 + px, y + px*3 + px], fill=outline)
+        self.draw.ellipse([x - px*5, y - px, x + px*5, y + px*3], fill=stone_base)
+        self.draw.ellipse([x - px*3, y - px, x + px*2, y + px*2], fill=stone_light)
+
+        # Meditation cushion on top (inviting spot to sit and think)
+        cushion_color = (180, 100, 120) if not active else (220, 120, 140)
+        cushion_light = (210, 140, 160)
+        self.draw.ellipse([x - px*3 - px, y - px*3 - px, x + px*3 + px, y + px], fill=outline)
+        self.draw.ellipse([x - px*3, y - px*3, x + px*3, y], fill=cushion_color)
+        self.draw.ellipse([x - px*2, y - px*3, x + px, y - px], fill=cushion_light)
+
+        # Floating thought bubble icon above (shows purpose)
+        bubble_bob = int(math.sin(frame * 0.05) * px)
+        bubble_y = y - px * 8 + bubble_bob
+        # Bubble outline and fill
+        self.draw.ellipse([x - px*3 - px, bubble_y - px*2 - px, x + px*3 + px, bubble_y + px*2 + px], fill=outline)
+        self.draw.ellipse([x - px*3, bubble_y - px*2, x + px*3, bubble_y + px*2], fill=(255, 255, 255))
+        # Small connecting dots
+        self.draw.ellipse([x - px, y - px*5 + bubble_bob, x + px, y - px*4 + bubble_bob], fill=(255, 255, 255))
+        self._safe_ellipse([x - px//2, y - px*6 + bubble_bob, x + px//2, y - px*5 + bubble_bob], fill=(255, 255, 255))
+        # "..." dots inside bubble (thinking indicator)
+        dot_y = bubble_y
+        for i in range(3):
+            dot_x = x - px*2 + i * px * 2
+            self._safe_ellipse([dot_x - px//2, dot_y - px//2, dot_x + px//2, dot_y + px//2], fill=(100, 100, 100))
 
         # When active, show elaborate thinking effects
         if active:
+            # Glowing aura around pedestal
+            aura_pulse = int(abs(math.sin(frame * 0.08)) * px * 2)
+            aura_color = (255, 255, 200, 100)
+            self.draw.ellipse([x - px*6 - aura_pulse, y - px*4 - aura_pulse,
+                             x + px*6 + aura_pulse, y + px*3 + aura_pulse], fill=(255, 255, 220))
+
+            # Redraw cushion on top of aura
+            self.draw.ellipse([x - px*3 - px, y - px*3 - px, x + px*3 + px, y + px], fill=outline)
+            self.draw.ellipse([x - px*3, y - px*3, x + px*3, y], fill=(220, 120, 140))
+
             # Orbiting thought sparkles
             for i in range(6):
                 angle = frame * 0.08 + i * math.pi / 3
-                dist = px * 5 + int(math.sin(frame * 0.15 + i * 0.7) * px * 2)
+                dist = px * 6 + int(math.sin(frame * 0.15 + i * 0.7) * px * 2)
                 sx = x + int(math.cos(angle) * dist)
-                sy = y - px * 3 + int(math.sin(angle) * dist * 0.4)
-                # Vary sparkle size
+                sy = y - px * 4 + int(math.sin(angle) * dist * 0.4)
                 sparkle_size = px + int(abs(math.sin(frame * 0.1 + i)) * px)
                 sparkle_color = [(255, 255, 180), (255, 220, 150), (200, 255, 200)][i % 3]
                 if (frame + i * 5) % 20 < 15:
@@ -888,29 +1121,13 @@ class TerminalGraphicsRenderer:
             # Rising thought bubbles
             for i in range(3):
                 bubble_phase = (frame * 0.2 + i * 12) % 30
-                bubble_x = x + int(math.sin(frame * 0.05 + i * 2) * px * 3)
-                bubble_y = y - px * 4 - int(bubble_phase * px * 0.6)
-                bubble_size = px * (3 - i) // 2
+                bx = x + int(math.sin(frame * 0.05 + i * 2) * px * 4)
+                by = y - px * 6 - int(bubble_phase * px * 0.7)
+                bsize = px * (3 - i) // 2 + px
                 if bubble_phase < 25:
-                    # Thought bubble outline
-                    self.draw.ellipse([bubble_x - bubble_size - px, bubble_y - bubble_size - px,
-                                     bubble_x + bubble_size + px, bubble_y + bubble_size + px],
-                                    fill=self.COLORS["outline"])
-                    self.draw.ellipse([bubble_x - bubble_size, bubble_y - bubble_size,
-                                     bubble_x + bubble_size, bubble_y + bubble_size],
-                                    fill=(255, 255, 255))
-
-            # Light beams emanating outward
-            for i in range(4):
-                beam_angle = frame * 0.03 + i * math.pi / 2
-                beam_len = px * 6 + int(math.sin(frame * 0.08 + i) * px * 2)
-                beam_x1 = x + int(math.cos(beam_angle) * px * 2)
-                beam_y1 = y - px * 2 + int(math.sin(beam_angle) * px)
-                beam_x2 = x + int(math.cos(beam_angle) * beam_len)
-                beam_y2 = y - px * 2 + int(math.sin(beam_angle) * beam_len * 0.4)
-                if (frame + i * 8) % 25 < 18:
-                    self.draw.line([(beam_x1, beam_y1), (beam_x2, beam_y2)],
-                                 fill=(255, 255, 200), width=max(1, px // 2))
+                    self.draw.ellipse([bx - bsize - px, by - bsize - px,
+                                     bx + bsize + px, by + bsize + px], fill=outline)
+                    self.draw.ellipse([bx - bsize, by - bsize, bx + bsize, by + bsize], fill=(255, 255, 255))
 
     def _draw_ambient_particles(self, frame: int, phase: str, px: int) -> None:
         """Draw floating ambient particles for a living world feel."""
@@ -964,9 +1181,9 @@ class TerminalGraphicsRenderer:
 
     def _draw_pixel_tree(self, x: int, y: int, scale: float, px: int, frame: int) -> None:
         """Draw a pixel art tree like in the reference image - round canopy with trunk."""
-        # Tree dimensions
+        # Tree dimensions - taller trunk for proper tree look
         trunk_w = int(px * 3 * scale)
-        trunk_h = int(px * 6 * scale)
+        trunk_h = int(px * 12 * scale)  # Doubled trunk height
         canopy_r = int(px * 8 * scale)
 
         # More noticeable sway animation - each tree sways at different rate
@@ -1221,6 +1438,44 @@ class TerminalGraphicsRenderer:
             fill=dark_color
         )
 
+        # === ARMS ===
+        arm_w = int(px * 3)
+        arm_h = int(px * 5)
+        arm_y = body_y + int(px * 2)  # Arms attach near top of body
+
+        # Arm swing animation when walking
+        if is_walking:
+            arm_swing = int(math.sin(frame * 0.4) * px * 2)
+        else:
+            # Gentle idle arm movement
+            arm_swing = int(math.sin(frame * 0.06) * px)
+
+        # Left arm - outline then fill
+        left_arm_x = center_x - body_w // 2 - arm_w
+        self.draw.rectangle(
+            [left_arm_x - px, arm_y - arm_swing - px,
+             left_arm_x + arm_w + px, arm_y - arm_swing + arm_h + px],
+            fill=outline
+        )
+        self.draw.rectangle(
+            [left_arm_x, arm_y - arm_swing,
+             left_arm_x + arm_w, arm_y - arm_swing + arm_h],
+            fill=body_color
+        )
+
+        # Right arm - outline then fill
+        right_arm_x = center_x + body_w // 2
+        self.draw.rectangle(
+            [right_arm_x - px, arm_y + arm_swing - px,
+             right_arm_x + arm_w + px, arm_y + arm_swing + arm_h + px],
+            fill=outline
+        )
+        self.draw.rectangle(
+            [right_arm_x, arm_y + arm_swing,
+             right_arm_x + arm_w, arm_y + arm_swing + arm_h],
+            fill=body_color
+        )
+
         # === HEAD (slightly narrower than body) ===
         head_w = int(px * 8)
         head_h = int(px * 8)
@@ -1302,14 +1557,20 @@ class TerminalGraphicsRenderer:
             agent_screen_x = screen_center_x + int(agent.position.x)
             agent_screen_y = screen_center_y + int(agent.position.y)
 
+            # Get agent type for color coding
+            agent_type = getattr(agent, 'agent_type', 'general-purpose')
+            status = getattr(agent, 'status', None)
+            status_value = status.value if hasattr(status, 'value') else 'idle'
+
             # Draw connection line with animated dashes
             self._draw_connection_line(
                 claude_x, claude_y - px * 8,  # From Claude's body center
                 agent_screen_x, agent_screen_y,
-                px, frame
+                px, frame, agent_type, status_value
             )
 
-    def _draw_connection_line(self, x1: int, y1: int, x2: int, y2: int, px: int, frame: int) -> None:
+    def _draw_connection_line(self, x1: int, y1: int, x2: int, y2: int, px: int, frame: int,
+                                agent_type: str = "general-purpose", status: str = "idle") -> None:
         """Draw an animated dashed connection line between two points."""
         # Calculate line parameters
         dx = x2 - x1
@@ -1323,17 +1584,37 @@ class TerminalGraphicsRenderer:
         nx = dx / distance
         ny = dy / distance
 
-        # Animated dash offset
-        dash_offset = (frame * 2) % 20
+        # Animated dash offset (direction: from Claude to agent for "working", reverse for "complete")
+        if status == "complete":
+            dash_offset = (distance - (frame * 3) % 20) % 20
+        else:
+            dash_offset = (frame * 2) % 20
 
         # Draw dashed line with glow effect
         dash_len = px * 4
         gap_len = px * 2
         segment_len = dash_len + gap_len
 
-        # Connection color - pulsing cyan/teal
+        # Color based on agent type
+        type_colors = {
+            "Explore": (100, 200, 150),      # Green
+            "Plan": (180, 140, 220),          # Purple
+            "general-purpose": (100, 180, 220),  # Blue/cyan
+        }
+        base_rgb = type_colors.get(agent_type, (100, 180, 220))
+
+        # Pulse effect
         pulse = abs(math.sin(frame * 0.1))
-        base_color = (100 + int(50 * pulse), 200 + int(30 * pulse), 220)
+        base_color = tuple(min(255, int(c + 30 * pulse)) for c in base_rgb)
+
+        # Line thickness based on status
+        line_width = max(1, px)
+        if status == "working":
+            line_width = max(2, px + 1)
+        elif status == "complete":
+            # Thicker, brighter line when complete
+            line_width = max(3, px + 2)
+            base_color = (100, 255, 150)  # Green for complete
 
         # Draw each dash segment
         pos = dash_offset
@@ -1348,21 +1629,55 @@ class TerminalGraphicsRenderer:
                 ey = int(y1 + ny * end_pos)
 
                 # Draw line segment
-                self.draw.line([(sx, sy), (ex, ey)], fill=base_color, width=max(1, px))
+                self.draw.line([(sx, sy), (ex, ey)], fill=base_color, width=line_width)
 
             pos += segment_len
 
+        # Draw direction arrows along the line
+        if distance > 60:
+            arrow_count = max(1, int(distance / 80))
+            for i in range(arrow_count):
+                arrow_pos = distance * (i + 1) / (arrow_count + 1)
+                ax = int(x1 + nx * arrow_pos)
+                ay = int(y1 + ny * arrow_pos)
+
+                # Arrow pointing toward subagent (or reverse if complete)
+                arrow_dir = 1 if status != "complete" else -1
+                arrow_len = px * 3
+                # Perpendicular
+                perp_x, perp_y = -ny, nx
+
+                # Arrow points
+                tip_x = ax + int(nx * arrow_len * arrow_dir)
+                tip_y = ay + int(ny * arrow_len * arrow_dir)
+                left_x = ax + int(perp_x * arrow_len * 0.5)
+                left_y = ay + int(perp_y * arrow_len * 0.5)
+                right_x = ax - int(perp_x * arrow_len * 0.5)
+                right_y = ay - int(perp_y * arrow_len * 0.5)
+
+                # Draw arrow
+                self.draw.polygon(
+                    [(tip_x, tip_y), (left_x, left_y), (right_x, right_y)],
+                    fill=base_color
+                )
+
         # Draw energy particles along the line (only if distance is large enough)
         if distance > 30:
-            for i in range(3):
-                particle_pos = ((frame * 3 + i * 30) % int(distance))
+            particle_count = 3 if status == "working" else 2
+            particle_speed = 4 if status == "working" else 2
+            for i in range(particle_count):
+                particle_pos = ((frame * particle_speed + i * 30) % int(distance))
+                if status == "complete":
+                    particle_pos = distance - particle_pos  # Reverse direction
                 px_pos = int(x1 + nx * particle_pos)
                 py_pos = int(y1 + ny * particle_pos)
                 particle_size = px + int(abs(math.sin(frame * 0.2 + i)) * px)
+                # Particle color matches line
+                particle_color = tuple(min(255, c + 50) for c in base_color)
                 self.draw.ellipse(
                     [px_pos - particle_size, py_pos - particle_size,
                      px_pos + particle_size, py_pos + particle_size],
-                    fill=(200, 255, 255)
+                    fill=particle_color
                 )
 
     def _render_subagents(self, state: GameState) -> None:
@@ -1385,7 +1700,7 @@ class TerminalGraphicsRenderer:
             self._draw_subagent(agent_x, agent_y, agent, px, frame)
 
     def _draw_subagent(self, x: int, y: int, agent, px: int, frame: int) -> None:
-        """Draw a single subagent character."""
+        """Draw a single subagent character with arms and feet."""
         # Subagent colors based on type
         agent_colors = {
             "Explore": ((100, 200, 150), (70, 160, 120)),    # Green
@@ -1400,6 +1715,9 @@ class TerminalGraphicsRenderer:
         # Bobbing animation
         bob = int(math.sin(frame * 0.1 + hash(agent.id) % 100) * px)
 
+        # Check if walking
+        is_walking = getattr(agent, 'is_walking', False)
+
         # Size (smaller than main Claude)
         body_w = int(px * 6)
         body_h = int(px * 5)
@@ -1410,6 +1728,45 @@ class TerminalGraphicsRenderer:
         self.draw.ellipse(
             [x - px * 4, y + px, x + px * 4, y + px * 3],
             fill=(60, 120, 50)
+        )
+
+        # === FEET ===
+        foot_w = int(px * 2)
+        foot_h = int(px * 2)
+        foot_y = y + bob
+
+        # Walking animation for feet
+        if is_walking:
+            left_foot_offset = int(math.sin(frame * 0.4 + hash(agent.id)) * px * 2)
+            right_foot_offset = int(math.sin(frame * 0.4 + hash(agent.id) + math.pi) * px * 2)
+        else:
+            left_foot_offset = 0
+            right_foot_offset = 0
+
+        # Left foot - outline then fill
+        left_foot_x = x - body_w // 2 + px
+        self.draw.rectangle(
+            [left_foot_x - px, foot_y - left_foot_offset - px,
+             left_foot_x + foot_w + px, foot_y - left_foot_offset + foot_h + px],
+            fill=outline
+        )
+        self.draw.rectangle(
+            [left_foot_x, foot_y - left_foot_offset,
+             left_foot_x + foot_w, foot_y - left_foot_offset + foot_h],
+            fill=body_color
+        )
+
+        # Right foot - outline then fill
+        right_foot_x = x + body_w // 2 - foot_w - px
+        self.draw.rectangle(
+            [right_foot_x - px, foot_y - right_foot_offset - px,
+             right_foot_x + foot_w + px, foot_y - right_foot_offset + foot_h + px],
+            fill=outline
+        )
+        self.draw.rectangle(
+            [right_foot_x, foot_y - right_foot_offset,
+             right_foot_x + foot_w, foot_y - right_foot_offset + foot_h],
+            fill=body_color
         )
 
         # Body outline + fill
@@ -1427,6 +1784,43 @@ class TerminalGraphicsRenderer:
             [x - body_w // 2, y - body_h + bob,
              x - body_w // 2 + px * 2, y + bob],
             fill=dark_color
+        )
+
+        # === ARMS ===
+        arm_w = int(px * 2)
+        arm_h = int(px * 4)
+        arm_y = y - body_h + bob + int(px * 2)
+
+        # Arm swing animation
+        if is_walking:
+            arm_swing = int(math.sin(frame * 0.4 + hash(agent.id)) * px * 2)
+        else:
+            arm_swing = int(math.sin(frame * 0.06 + hash(agent.id)) * px)
+
+        # Left arm - outline then fill
+        left_arm_x = x - body_w // 2 - arm_w
+        self.draw.rectangle(
+            [left_arm_x - px, arm_y - arm_swing - px,
+             left_arm_x + arm_w + px, arm_y - arm_swing + arm_h + px],
+            fill=outline
+        )
+        self.draw.rectangle(
+            [left_arm_x, arm_y - arm_swing,
+             left_arm_x + arm_w, arm_y - arm_swing + arm_h],
+            fill=body_color
+        )
+
+        # Right arm - outline then fill
+        right_arm_x = x + body_w // 2
+        self.draw.rectangle(
+            [right_arm_x - px, arm_y + arm_swing - px,
+             right_arm_x + arm_w + px, arm_y + arm_swing + arm_h + px],
+            fill=outline
+        )
+        self.draw.rectangle(
+            [right_arm_x, arm_y + arm_swing,
+             right_arm_x + arm_w, arm_y + arm_swing + arm_h],
+            fill=body_color
         )
 
         # Head outline + fill
@@ -1453,16 +1847,96 @@ class TerminalGraphicsRenderer:
             fill=self.COLORS["claude_eyes"]
         )
 
-        # Activity indicator (small orbiting dot)
-        orbit_angle = frame * 0.15 + hash(agent.id) % 100
-        orbit_r = px * 4
-        dot_x = x + int(math.cos(orbit_angle) * orbit_r)
-        dot_y = head_y - head_h + int(math.sin(orbit_angle) * orbit_r * 0.5)
-        dot_color = (255, 255, 150) if agent.activity.value == "exploring" else (200, 200, 255)
-        self.draw.ellipse(
-            [dot_x - px, dot_y - px, dot_x + px, dot_y + px],
-            fill=dot_color
-        )
+        # Activity-specific indicator above subagent
+        activity = agent.activity.value if hasattr(agent.activity, 'value') else str(agent.activity)
+        indicator_y = head_y - head_h - px * 2
+
+        if activity == "exploring":
+            # Small binoculars icon
+            lens_r = px
+            gap = px * 2
+            self.draw.ellipse(
+                [x - gap - lens_r, indicator_y - lens_r, x - gap + lens_r, indicator_y + lens_r],
+                fill=(80, 80, 100), outline=(60, 60, 80)
+            )
+            self.draw.ellipse(
+                [x + gap - lens_r, indicator_y - lens_r, x + gap + lens_r, indicator_y + lens_r],
+                fill=(80, 80, 100), outline=(60, 60, 80)
+            )
+            # Glint animation
+            glint_x = x - gap + int(math.sin(frame * 0.1) * px)
+            self.draw.rectangle([glint_x, indicator_y - px, glint_x + 1, indicator_y], fill=(180, 200, 255))
+
+        elif activity == "thinking":
+            # Mini thought bubble
+            bubble_bob = int(math.sin(frame * 0.08) * 2)
+            for i, (bx_off, by_off, br) in enumerate([(-px, px, 1), (-px*2, 0, 2), (-px*3, -px*2, 3)]):
+                self.draw.ellipse(
+                    [x + bx_off - br, indicator_y + by_off + bubble_bob - br,
+                     x + bx_off + br, indicator_y + by_off + bubble_bob + br],
+                    fill=(255, 255, 255), outline=(200, 200, 200)
+                )
+
+        elif activity == "reading":
+            # Mini book icon
+            book_w, book_h = px * 3, px * 2
+            self.draw.rectangle(
+                [x - book_w // 2, indicator_y - book_h // 2, x + book_w // 2, indicator_y + book_h // 2],
+                fill=(240, 230, 210), outline=(180, 160, 130)
+            )
+            # Spine
+            self.draw.line([(x, indicator_y - book_h // 2), (x, indicator_y + book_h // 2)], fill=(160, 140, 110))
+
+        elif activity == "writing":
+            # Pencil/code symbol
+            symbols = ["{}", "< >", "[]"]
+            sym_idx = (frame // 20 + hash(agent.id)) % len(symbols)
+            self.draw.text((x - px * 2, indicator_y - px), symbols[sym_idx], fill=(150, 200, 255))
+
+        elif activity == "searching":
+            # Mini magnifying glass
+            glass_r = px * 2
+            self.draw.ellipse(
+                [x - glass_r, indicator_y - glass_r, x + glass_r, indicator_y + glass_r],
+                outline=(200, 150, 50), width=1
+            )
+            self.draw.line(
+                [(x + glass_r - 1, indicator_y + glass_r - 1), (x + glass_r + px, indicator_y + glass_r + px)],
+                fill=(200, 150, 50), width=1
+            )
+
+        elif activity == "building":
+            # Mini rotating gear
+            gear_r = px * 2
+            rotation = frame * 0.08 + hash(agent.id)
+            for i in range(4):
+                angle = rotation + i * math.pi / 2
+                sx = x + int(math.cos(angle) * gear_r)
+                sy = indicator_y + int(math.sin(angle) * gear_r)
+                self.draw.rectangle([sx - 1, sy - 1, sx + 1, sy + 1], fill=(200, 150, 50))
+            self.draw.ellipse([x - px, indicator_y - px, x + px, indicator_y + px], fill=(180, 130, 40))
+
+        elif activity == "communicating":
+            # Radio waves
+            wave_phase = (frame * 0.15) % 1.0
+            for i in range(2):
+                arc_r = int((px + i * px * 2) * (0.5 + wave_phase * 0.5))
+                alpha = int(200 * (1 - wave_phase))
+                self.draw.arc(
+                    [x + px - arc_r, indicator_y - arc_r, x + px + arc_r, indicator_y + arc_r],
+                    start=-45, end=45, fill=(alpha, alpha, 255), width=1
+                )
+
+        else:
+            # Default: simple orbiting dot
+            orbit_angle = frame * 0.15 + hash(agent.id) % 100
+            orbit_r = px * 4
+            dot_x = x + int(math.cos(orbit_angle) * orbit_r)
+            dot_y = indicator_y + int(math.sin(orbit_angle) * orbit_r * 0.5)
+            self.draw.ellipse(
+                [dot_x - px, dot_y - px, dot_x + px, dot_y + px],
+                fill=(200, 200, 255)
+            )
 
         # Agent type label (small text above)
         type_short = {
@@ -1475,6 +1949,60 @@ class TerminalGraphicsRenderer:
             type_short,
             fill=(200, 200, 200)
         )
+
+        # Status indicator (above type label)
+        status = getattr(agent, 'status', None)
+        if status:
+            status_y = head_y - head_h - px * 8
+            status_value = status.value if hasattr(status, 'value') else str(status)
+
+            if status_value == "complete":
+                # Green checkmark
+                check_color = (100, 255, 100)
+                # Draw checkmark
+                self.draw.line([(x - px * 2, status_y), (x, status_y + px * 2)], fill=check_color, width=2)
+                self.draw.line([(x, status_y + px * 2), (x + px * 3, status_y - px)], fill=check_color, width=2)
+                # Glow effect
+                self.draw.ellipse(
+                    [x - px * 4, status_y - px * 2, x + px * 4, status_y + px * 4],
+                    outline=(100, 255, 100)
+                )
+
+            elif status_value == "error":
+                # Red X
+                error_color = (255, 100, 100)
+                self.draw.line([(x - px * 2, status_y - px), (x + px * 2, status_y + px * 3)], fill=error_color, width=2)
+                self.draw.line([(x - px * 2, status_y + px * 3), (x + px * 2, status_y - px)], fill=error_color, width=2)
+                # Pulsing glow
+                pulse = abs(math.sin(frame * 0.2))
+                glow_r = int(px * 4 * (1 + pulse * 0.3))
+                self.draw.ellipse(
+                    [x - glow_r, status_y - glow_r // 2, x + glow_r, status_y + glow_r],
+                    outline=(255, int(100 * pulse), int(100 * pulse))
+                )
+
+            elif status_value == "working":
+                # Lightning bolt / energy indicator
+                bolt_color = (255, 220, 100)
+                # Animated bolt
+                bolt_offset = int(math.sin(frame * 0.3) * px)
+                points = [
+                    (x - px, status_y - px + bolt_offset),
+                    (x + px, status_y + px + bolt_offset),
+                    (x, status_y + px + bolt_offset),
+                    (x + px * 2, status_y + px * 3 + bolt_offset),
+                    (x, status_y + px * 2 + bolt_offset),
+                    (x + px, status_y + px * 2 + bolt_offset),
+                ]
+                for i in range(len(points) - 1):
+                    self.draw.line([points[i], points[i + 1]], fill=bolt_color, width=1)
+                # Sparkle
+                sparkle_phase = frame * 0.2
+                for i in range(3):
+                    angle = sparkle_phase + i * 2.1
+                    sx = x + int(math.cos(angle) * px * 3)
+                    sy = status_y + px + int(math.sin(angle) * px * 2)
+                    self.draw.point((sx, sy), fill=(255, 255, 200))
 
     def _render_activity_accessory(self, x: int, head_y: int, body_y: int,
                                     scale: float, activity: str, frame: int) -> None:
@@ -1546,11 +2074,363 @@ class TerminalGraphicsRenderer:
                 fill=self.COLORS["accent_primary"]
             )
 
+        elif activity == "thinking":
+            # Floating thought bubbles with ellipsis
+            bubble_x = x + int(50 * scale)
+            bubble_y = head_y - int(20 * scale)
+
+            # Three ascending bubbles
+            for i in range(3):
+                size = int((4 + i * 3) * scale)
+                bx = bubble_x - i * int(8 * scale)
+                by = bubble_y - i * int(12 * scale)
+                bob_offset = int(math.sin(frame * 0.08 + i * 0.5) * 3)
+                self.draw.ellipse(
+                    [bx - size, by - size + bob_offset, bx + size, by + size + bob_offset],
+                    fill=(255, 255, 255), outline=(200, 200, 200)
+                )
+
+            # Main thought cloud
+            cloud_x = bubble_x - int(30 * scale)
+            cloud_y = bubble_y - int(50 * scale)
+            cloud_w = int(40 * scale)
+            cloud_h = int(25 * scale)
+            bob = int(math.sin(frame * 0.06) * 2)
+
+            # Cloud shape (overlapping circles)
+            for cx, cy, cr in [
+                (cloud_x, cloud_y + bob, cloud_h // 2),
+                (cloud_x + cloud_w // 3, cloud_y - 5 + bob, cloud_h // 2 + 3),
+                (cloud_x + cloud_w * 2 // 3, cloud_y + bob, cloud_h // 2),
+            ]:
+                self.draw.ellipse(
+                    [cx - cr, cy - cr, cx + cr, cy + cr],
+                    fill=(255, 255, 255), outline=(200, 200, 200)
+                )
+
+            # Ellipsis dots in cloud
+            for i in range(3):
+                dot_x = cloud_x + int((i - 1) * 10 * scale)
+                dot_y = cloud_y + bob
+                dot_r = int(3 * scale)
+                self.draw.ellipse(
+                    [dot_x - dot_r, dot_y - dot_r, dot_x + dot_r, dot_y + dot_r],
+                    fill=(100, 100, 100)
+                )
+
+        elif activity == "exploring":
+            # Binoculars/telescope icon
+            scope_x = x + int(45 * scale)
+            scope_y = head_y - int(5 * scale)
+            scope_r = int(10 * scale)
+            scope_gap = int(8 * scale)
+
+            # Scanning animation
+            scan_angle = math.sin(frame * 0.04) * 0.3
+
+            # Left lens
+            left_x = scope_x - scope_gap
+            self.draw.ellipse(
+                [left_x - scope_r, scope_y - scope_r, left_x + scope_r, scope_y + scope_r],
+                fill=(60, 60, 80), outline=(40, 40, 50), width=2
+            )
+            # Lens glint
+            glint_offset = int(math.sin(frame * 0.1) * 3)
+            self.draw.ellipse(
+                [left_x - 3 + glint_offset, scope_y - 5, left_x + 1 + glint_offset, scope_y - 1],
+                fill=(150, 180, 255)
+            )
+
+            # Right lens
+            right_x = scope_x + scope_gap
+            self.draw.ellipse(
+                [right_x - scope_r, scope_y - scope_r, right_x + scope_r, scope_y + scope_r],
+                fill=(60, 60, 80), outline=(40, 40, 50), width=2
+            )
+            # Lens glint
+            self.draw.ellipse(
+                [right_x - 3 + glint_offset, scope_y - 5, right_x + 1 + glint_offset, scope_y - 1],
+                fill=(150, 180, 255)
+            )
+
+            # Bridge between lenses
+            self.draw.rectangle(
+                [left_x + scope_r - 2, scope_y - 3, right_x - scope_r + 2, scope_y + 3],
+                fill=(50, 50, 60)
+            )
+
+            # Scanning lines emanating outward
+            for i in range(3):
+                angle = scan_angle + (i - 1) * 0.2
+                line_len = int(25 * scale) + i * 5
+                end_x = scope_x + int(math.cos(angle) * line_len)
+                end_y = scope_y + int(math.sin(angle) * line_len * 0.3)
+                alpha = 150 - i * 40
+                self.draw.line(
+                    [(scope_x + scope_gap + scope_r, scope_y), (end_x, end_y)],
+                    fill=(alpha, alpha + 50, 255), width=1
+                )
+
+        elif activity == "communicating":
+            # Speech/radio waves emanating
+            wave_x = x + int(50 * scale)
+            wave_y = head_y
+
+            # Animated wave arcs
+            for i in range(3):
+                wave_phase = (frame * 0.1 + i * 0.5) % 2
+                if wave_phase < 1.5:  # Only show during part of animation
+                    arc_r = int((15 + i * 12) * scale * wave_phase)
+                    arc_alpha = int(255 * (1 - wave_phase / 1.5))
+
+                    # Draw arc segments
+                    for angle in range(-30, 31, 10):
+                        rad = math.radians(angle)
+                        ax = wave_x + int(math.cos(rad) * arc_r)
+                        ay = wave_y + int(math.sin(rad) * arc_r * 0.5)
+                        self.draw.ellipse(
+                            [ax - 2, ay - 2, ax + 2, ay + 2],
+                            fill=(arc_alpha, arc_alpha, 255)
+                        )
+
+            # Central speaker/antenna icon
+            self.draw.polygon(
+                [(wave_x - 5, wave_y - 8), (wave_x + 5, wave_y - 3),
+                 (wave_x + 5, wave_y + 3), (wave_x - 5, wave_y + 8)],
+                fill=(200, 180, 100), outline=(150, 130, 70)
+            )
+
+        elif activity == "idle":
+            # Subtle floating sparkles/dust motes when idle
+            for i in range(4):
+                sparkle_phase = (frame * 0.03 + i * 1.5) % (2 * math.pi)
+                sparkle_x = x + int(math.cos(sparkle_phase + i) * 40 * scale)
+                sparkle_y = body_y - int(20 * scale) + int(math.sin(sparkle_phase * 2) * 30)
+                sparkle_alpha = int(100 + 100 * math.sin(sparkle_phase))
+
+                if sparkle_alpha > 50:
+                    size = int(2 * scale * (0.5 + 0.5 * math.sin(sparkle_phase)))
+                    self.draw.ellipse(
+                        [sparkle_x - size, sparkle_y - size, sparkle_x + size, sparkle_y + size],
+                        fill=(255, 255, 200, sparkle_alpha)
+                    )
+
+    def _render_tool_spinner(self, state: GameState) -> None:
+        """Render tool-specific spinner/indicator near Claude."""
+        tool = state.main_agent.current_tool or state.main_agent.last_tool
+        if not tool or state.main_agent.activity.value == "idle":
+            return
+
+        scale = min(self.width / 800, self.height / 400)
+        scale = max(0.5, min(scale, 2.0))
+        px = max(2, self.height // 120)
+
+        # Position spinner to the right of Claude
+        center_x = self.width // 2
+        center_y = int(self.height * 0.55)
+        spinner_x = center_x + int(60 * scale)
+        spinner_y = center_y - int(40 * scale)
+
+        frame = self._frame_count
+
+        # Tool-specific spinner animations
+        if tool in ["Read"]:
+            # Page flip animation - book pages
+            page_offset = int((frame % 30) / 10)
+            book_colors = [(200, 180, 150), (220, 200, 170), (240, 220, 190)]
+            book_w = int(20 * scale)
+            book_h = int(16 * scale)
+            # Book base
+            self.draw.rectangle(
+                [spinner_x, spinner_y, spinner_x + book_w, spinner_y + book_h],
+                fill=book_colors[page_offset % 3],
+                outline=(100, 80, 60)
+            )
+            # Page lines
+            for i in range(3):
+                line_y = spinner_y + int(4 * scale) + i * int(3 * scale)
+                self.draw.line(
+                    [(spinner_x + 3, line_y), (spinner_x + book_w - 3, line_y)],
+                    fill=(80, 60, 40),
+                    width=1
+                )
+
+        elif tool in ["Write", "Edit"]:
+            # Pencil wiggle with writing particles
+            wiggle = int(3 * math.sin(frame * 0.4))
+            pencil_len = int(20 * scale)
+            # Pencil body (yellow)
+            self.draw.rectangle(
+                [spinner_x + wiggle, spinner_y, spinner_x + pencil_len + wiggle, spinner_y + int(6 * scale)],
+                fill=(255, 220, 100),
+                outline=(200, 170, 50)
+            )
+            # Pencil tip
+            self.draw.polygon(
+                [(spinner_x + pencil_len + wiggle, spinner_y),
+                 (spinner_x + pencil_len + int(6 * scale) + wiggle, spinner_y + int(3 * scale)),
+                 (spinner_x + pencil_len + wiggle, spinner_y + int(6 * scale))],
+                fill=(100, 80, 60)
+            )
+            # Writing sparkles
+            for i in range(3):
+                spark_x = spinner_x + pencil_len + int(10 * scale) + int(math.cos(frame * 0.3 + i) * 8)
+                spark_y = spinner_y + int(3 * scale) + int(math.sin(frame * 0.3 + i) * 8)
+                spark_size = int(2 * scale * (0.5 + 0.5 * math.sin(frame * 0.2 + i)))
+                self.draw.ellipse(
+                    [spark_x - spark_size, spark_y - spark_size, spark_x + spark_size, spark_y + spark_size],
+                    fill=(100, 200, 255)
+                )
+
+        elif tool in ["Bash"]:
+            # Terminal cursor blink
+            cursor_visible = (frame % 30) < 20
+            term_w = int(24 * scale)
+            term_h = int(16 * scale)
+            # Terminal background
+            self.draw.rectangle(
+                [spinner_x, spinner_y, spinner_x + term_w, spinner_y + term_h],
+                fill=(30, 30, 40),
+                outline=(60, 60, 80)
+            )
+            # Prompt
+            self.draw.text((spinner_x + 2, spinner_y + 2), ">", fill=(100, 255, 100))
+            # Cursor
+            if cursor_visible:
+                cursor_x = spinner_x + int(10 * scale)
+                self.draw.rectangle(
+                    [cursor_x, spinner_y + 3, cursor_x + int(6 * scale), spinner_y + term_h - 3],
+                    fill=(200, 200, 200)
+                )
+
+        elif tool in ["Grep", "Glob"]:
+            # Magnifying glass sweep
+            sweep_angle = (frame % 60) * 6  # 0-360 over 60 frames
+            glass_x = spinner_x + int(10 * scale) + int(8 * math.cos(math.radians(sweep_angle)))
+            glass_y = spinner_y + int(8 * scale) + int(4 * math.sin(math.radians(sweep_angle)))
+            glass_r = int(8 * scale)
+            # Glass circle
+            self.draw.ellipse(
+                [glass_x - glass_r, glass_y - glass_r, glass_x + glass_r, glass_y + glass_r],
+                fill=None,
+                outline=(200, 200, 255),
+                width=2
+            )
+            # Handle
+            handle_x = glass_x + int(glass_r * 0.7)
+            handle_y = glass_y + int(glass_r * 0.7)
+            self.draw.line(
+                [(handle_x, handle_y), (handle_x + int(6 * scale), handle_y + int(6 * scale))],
+                fill=(150, 130, 100),
+                width=3
+            )
+            # Shine
+            self.draw.arc(
+                [glass_x - glass_r + 2, glass_y - glass_r + 2, glass_x, glass_y],
+                start=200, end=280,
+                fill=(255, 255, 255),
+                width=1
+            )
+
+        elif tool in ["WebFetch", "WebSearch"]:
+            # Loading dots (Braille-style animation)
+            dots = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+            dot_idx = (frame // 3) % len(dots)
+            # Draw dots as circles instead (more visible)
+            dot_positions = [
+                (0, 0), (1, 0), (0, 1), (1, 1), (0, 2), (1, 2)
+            ]
+            pattern = [
+                [1, 0, 1, 0, 1, 0],  # ⠋
+                [1, 1, 0, 0, 1, 0],  # ⠙
+                [1, 1, 0, 1, 0, 0],  # ⠹
+                [0, 1, 0, 1, 0, 1],  # ⠸
+                [0, 0, 1, 1, 0, 1],  # ⠼
+                [0, 0, 0, 1, 1, 1],  # ⠴
+                [0, 0, 1, 0, 1, 1],  # ⠦
+                [1, 0, 1, 0, 0, 1],  # ⠧
+                [1, 0, 1, 0, 1, 0],  # ⠇
+                [1, 0, 0, 0, 1, 1],  # ⠏
+            ]
+            dot_size = int(3 * scale)
+            for i, (dx, dy) in enumerate(dot_positions):
+                if pattern[dot_idx][i]:
+                    dx_px = spinner_x + dx * int(8 * scale)
+                    dy_px = spinner_y + dy * int(6 * scale)
+                    self.draw.ellipse(
+                        [dx_px, dy_px, dx_px + dot_size, dy_px + dot_size],
+                        fill=(100, 200, 255)
+                    )
+            # Globe icon
+            globe_x = spinner_x + int(20 * scale)
+            globe_r = int(8 * scale)
+            self.draw.ellipse(
+                [globe_x - globe_r, spinner_y, globe_x + globe_r, spinner_y + globe_r * 2],
+                fill=None,
+                outline=(100, 150, 200),
+                width=1
+            )
+            # Latitude lines
+            self.draw.line(
+                [(globe_x - globe_r, spinner_y + globe_r), (globe_x + globe_r, spinner_y + globe_r)],
+                fill=(100, 150, 200)
+            )
+
+        elif tool in ["Task"]:
+            # Branching/spawning animation
+            branch_phase = (frame % 40) / 40.0
+            # Central node
+            node_r = int(5 * scale)
+            self.draw.ellipse(
+                [spinner_x - node_r, spinner_y - node_r, spinner_x + node_r, spinner_y + node_r],
+                fill=(100, 180, 180),
+                outline=(70, 140, 140)
+            )
+            # Branching lines
+            for i in range(3):
+                angle = math.radians(i * 120 - 90 + frame * 2)
+                length = int(15 * scale * branch_phase)
+                end_x = spinner_x + int(length * math.cos(angle))
+                end_y = spinner_y + int(length * math.sin(angle))
+                # Line
+                self.draw.line(
+                    [(spinner_x, spinner_y), (end_x, end_y)],
+                    fill=(100, 200, 180),
+                    width=2
+                )
+                # End node
+                if branch_phase > 0.5:
+                    small_r = int(3 * scale * (branch_phase - 0.5) * 2)
+                    self.draw.ellipse(
+                        [end_x - small_r, end_y - small_r, end_x + small_r, end_y + small_r],
+                        fill=(150, 210, 200)
+                    )
+
+        else:
+            # Default: simple spinning indicator
+            spin_angle = frame * 10
+            for i in range(8):
+                angle = math.radians(spin_angle + i * 45)
+                dist = int(8 * scale)
+                dot_x = spinner_x + int(dist * math.cos(angle))
+                dot_y = spinner_y + int(dist * math.sin(angle))
+                alpha = 1.0 - (i / 8.0)
+                dot_r = int(2 * scale)
+                color = (int(150 * alpha), int(150 * alpha), int(200 * alpha))
+                self.draw.ellipse(
+                    [dot_x - dot_r, dot_y - dot_r, dot_x + dot_r, dot_y + dot_r],
+                    fill=color
+                )
+
     def _render_particles(self, state: GameState) -> None:
         """Render particle effects."""
         self.particle_count = len(state.particles)
 
         for particle in state.particles:
+            # Skip dead particles
+            if particle.lifetime <= 0 or particle.max_lifetime <= 0:
+                continue
+
             # Simple screen-space particles (no camera transform for idle game style)
             # Center the particle system around Claude
             center_x = self.width // 2
@@ -1559,14 +2439,128 @@ class TerminalGraphicsRenderer:
             screen_x = center_x + int(particle.position.x - state.main_agent.position.x)
             screen_y = center_y + int(particle.position.y - state.main_agent.position.y)
 
-            alpha = particle.lifetime / particle.max_lifetime
-            color = tuple(int(c * alpha) for c in particle.color)
+            # Clamp alpha to valid range
+            alpha = max(0.0, min(1.0, particle.lifetime / particle.max_lifetime))
+            color = tuple(max(0, min(255, int(c * alpha))) for c in particle.color)
             size = max(1, int(4 * particle.scale * alpha))
 
-            self.draw.ellipse(
-                [screen_x - size, screen_y - size, screen_x + size, screen_y + size],
+            # Validate ellipse coordinates before drawing
+            x1, y1 = screen_x - size, screen_y - size
+            x2, y2 = screen_x + size, screen_y + size
+            if x2 > x1 and y2 > y1:
+                self.draw.ellipse([x1, y1, x2, y2], fill=color)
+
+    def _render_floating_texts(self, state: GameState) -> None:
+        """Render floating text popups (e.g., +5 XP)."""
+        if not hasattr(state, 'floating_texts'):
+            return
+
+        center_x = self.width // 2
+        center_y = int(self.height * 0.55)
+
+        for ft in state.floating_texts:
+            # Position relative to Claude
+            screen_x = center_x + int(ft.position.x - state.main_agent.position.x)
+            screen_y = center_y + int(ft.position.y - state.main_agent.position.y)
+
+            # Calculate alpha (fade out)
+            alpha = ft.alpha
+
+            # Scale text size based on screen
+            scale = min(self.width / 800, self.height / 400)
+            scale = max(0.5, min(scale, 2.0))
+
+            # Color with alpha
+            color = tuple(int(c * alpha) for c in ft.color)
+
+            # Draw text with outline for readability
+            outline_color = tuple(int(20 * alpha) for _ in range(3))
+
+            # Draw outline (4 directions)
+            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                self.draw.text(
+                    (screen_x + dx, screen_y + dy),
+                    ft.text,
+                    fill=outline_color
+                )
+
+            # Draw main text
+            self.draw.text(
+                (screen_x, screen_y),
+                ft.text,
                 fill=color
             )
+
+    def _render_level_up_overlay(self, state: GameState) -> None:
+        """Render level-up celebration overlay."""
+        if state.progression.level_up_timer <= 0:
+            return
+
+        # Calculate animation progress (0 to 1, where 1 is start of animation)
+        progress = state.progression.level_up_timer / 3.0  # 3 second duration
+
+        scale = min(self.width / 800, self.height / 400)
+        scale = max(0.5, min(scale, 2.0))
+
+        # Flash effect at the start
+        if progress > 0.9:
+            flash_alpha = int((progress - 0.9) * 10 * 100)
+            overlay = Image.new("RGBA", (self.width, self.height), (255, 255, 255, flash_alpha))
+            self.frame = Image.alpha_composite(self.frame, overlay)
+            self.draw = ImageDraw.Draw(self.frame)
+
+        # "LEVEL UP!" banner
+        if progress > 0.3:
+            banner_alpha = min(1.0, (progress - 0.3) / 0.2)
+
+            # Banner position - centered, above Claude
+            banner_y = int(self.height * 0.25)
+            banner_text = f"LEVEL UP!"
+
+            # Pulsing scale effect
+            pulse = 1.0 + 0.1 * math.sin(self._frame_count * 0.3)
+
+            # Gold color with fade
+            gold = (255, 215, 0)
+            color = tuple(int(c * banner_alpha) for c in gold)
+            outline_color = tuple(int(40 * banner_alpha) for _ in range(3))
+
+            # Draw banner text centered
+            text_x = self.width // 2 - len(banner_text) * 4
+            text_y = banner_y
+
+            # Draw outline
+            for dx, dy in [(-2, 0), (2, 0), (0, -2), (0, 2), (-2, -2), (2, 2), (-2, 2), (2, -2)]:
+                self.draw.text((text_x + dx, text_y + dy), banner_text, fill=outline_color)
+
+            # Draw main text
+            self.draw.text((text_x, text_y), banner_text, fill=color)
+
+            # Level number below
+            level_text = f"Level {state.progression.level}"
+            level_x = self.width // 2 - len(level_text) * 3
+            self.draw.text((level_x, text_y + 20), level_text, fill=color)
+
+        # Confetti particles
+        if progress > 0.5:
+            import random
+            random.seed(int(self._frame_count / 2))
+            confetti_colors = [
+                (255, 100, 100), (100, 255, 100), (100, 100, 255),
+                (255, 255, 100), (255, 100, 255), (100, 255, 255),
+            ]
+            for i in range(20):
+                x = random.randint(0, self.width)
+                y = random.randint(0, self.height)
+                # Fall down over time
+                y = (y + int((1 - progress) * 200)) % self.height
+                size = random.randint(2, 5)
+                color = confetti_colors[i % len(confetti_colors)]
+                alpha_color = tuple(int(c * progress) for c in color)
+                self.draw.rectangle(
+                    [x, y, x + size, y + size],
+                    fill=alpha_color
+                )
 
     def _render_stats_panel(self, state: GameState) -> None:
         """Render pixel art wood panel UI at the bottom like the reference."""
@@ -1616,11 +2610,11 @@ class TerminalGraphicsRenderer:
             [level_x, level_y, level_x + coin_size, level_y + coin_size],
             fill=self.COLORS["accent_primary"]
         )
-        # Coin shine
-        self.draw.ellipse(
-            [level_x + px * 2, level_y + px * 2, level_x + coin_size // 2, level_y + coin_size // 2],
-            fill=(255, 230, 100)
-        )
+        # Coin shine (validate coordinates to prevent crash)
+        shine_x1, shine_y1 = level_x + px * 2, level_y + px * 2
+        shine_x2, shine_y2 = level_x + coin_size // 2, level_y + coin_size // 2
+        if shine_x2 > shine_x1 and shine_y2 > shine_y1:
+            self.draw.ellipse([shine_x1, shine_y1, shine_x2, shine_y2], fill=(255, 230, 100))
 
         # Token count
         self.draw.text(
@@ -1635,30 +2629,81 @@ class TerminalGraphicsRenderer:
         bar_x = self.width // 2 - bar_w // 2
         bar_y = panel_y + int(12 * scale)
 
-        # Level text above bar
+        # Level text above bar (with pulse on level-up)
         level_text = f"LEVEL {state.progression.level}"
         text_x = bar_x + bar_w // 2 - len(level_text) * 3
-        self.draw.text((text_x, bar_y - int(2 * scale)), level_text, fill=self.COLORS["ui_text"])
+        level_color = self.COLORS["ui_text"]
+        if state.progression.level_up_timer > 0:
+            # Pulse gold during level-up celebration
+            pulse = int(127 + 127 * math.sin(self._frame_count * 0.4))
+            level_color = (255, 200 + pulse // 4, pulse // 2)
+        self.draw.text((text_x, bar_y - int(2 * scale)), level_text, fill=level_color)
+
+        # Use animated display_xp for smooth fill
+        display_xp = state.progression.display_xp if hasattr(state.progression, 'display_xp') else state.progression.experience
+        xp_pct = min(1.0, display_xp / max(1, state.progression.experience_to_next))
+
+        # Glow effect when close to level-up (last 20%)
+        bar_inner_y = bar_y + int(12 * scale)
+        if xp_pct > 0.8:
+            glow_intensity = (xp_pct - 0.8) / 0.2  # 0 to 1
+            glow_pulse = 0.5 + 0.5 * math.sin(self._frame_count * 0.2)
+            glow_alpha = int(glow_intensity * glow_pulse * 60)
+            glow_color = (200, 100, 255, glow_alpha)
+            # Draw glow around bar
+            for glow_offset in range(1, 4):
+                self.draw.rectangle(
+                    [bar_x - glow_offset - px, bar_inner_y - glow_offset - px,
+                     bar_x + bar_w + glow_offset + px, bar_inner_y + bar_h + glow_offset + px],
+                    outline=(200, 100, 255)
+                )
 
         # XP bar outline
         self.draw.rectangle(
-            [bar_x - px, bar_y + int(12 * scale) - px, bar_x + bar_w + px, bar_y + int(12 * scale) + bar_h + px],
+            [bar_x - px, bar_inner_y - px, bar_x + bar_w + px, bar_inner_y + bar_h + px],
             fill=self.COLORS["outline"]
         )
         # Bar background
         self.draw.rectangle(
-            [bar_x, bar_y + int(12 * scale), bar_x + bar_w, bar_y + int(12 * scale) + bar_h],
+            [bar_x, bar_inner_y, bar_x + bar_w, bar_inner_y + bar_h],
             fill=(40, 30, 50)
         )
-        # Bar fill
-        xp_pct = min(1.0, state.progression.experience / max(1, state.progression.experience_to_next))
+
+        # Milestone markers at 25%, 50%, 75%
+        for milestone_pct in [0.25, 0.5, 0.75]:
+            marker_x = bar_x + int(bar_w * milestone_pct)
+            marker_color = (80, 60, 100) if xp_pct < milestone_pct else (150, 100, 200)
+            self.draw.line(
+                [(marker_x, bar_inner_y + 2), (marker_x, bar_inner_y + bar_h - 2)],
+                fill=marker_color,
+                width=1
+            )
+
+        # Bar fill with animated width
         if xp_pct > 0:
             fill_w = int(bar_w * xp_pct)
             # Only draw if rectangle has valid dimensions (x1 > x0)
             if fill_w > px * 2:
+                # Determine fill color - pulse brighter on XP gain
+                fill_color = self.COLORS["accent_xp"]
+                if state.progression.xp_gain_flash > 0:
+                    flash_intensity = state.progression.xp_gain_flash / 0.5
+                    pulse_bright = int(flash_intensity * 50)
+                    fill_color = (
+                        min(255, fill_color[0] + pulse_bright),
+                        min(255, fill_color[1] + pulse_bright),
+                        min(255, fill_color[2] + pulse_bright),
+                    )
                 self.draw.rectangle(
-                    [bar_x + px, bar_y + int(12 * scale) + px, bar_x + fill_w - px, bar_y + int(12 * scale) + bar_h - px],
-                    fill=self.COLORS["accent_xp"]
+                    [bar_x + px, bar_inner_y + px, bar_x + fill_w - px, bar_inner_y + bar_h - px],
+                    fill=fill_color
+                )
+
+                # Shine effect on the bar fill
+                shine_x = bar_x + px + int((fill_w - px * 2) * 0.3)
+                self.draw.rectangle(
+                    [shine_x, bar_inner_y + px, shine_x + px * 2, bar_inner_y + bar_h // 3],
+                    fill=(255, 200, 255)
                 )
 
         # XP text
@@ -1820,17 +2865,27 @@ class TerminalGraphicsRenderer:
         scale = min(self.width / 800, self.height / 400)
         scale = max(0.5, min(scale, 2.0))
 
-        # Position banner above Claude's head
-        center_x = self.width // 2
-        # Claude's head is around 0.58 * height, so position banner above that
-        ground_y = int(self.height * 0.58)
-        head_y = ground_y - int(px * 16)  # Approximate head position
+        # Get agent's actual screen position
+        # Agent position is relative offset from center, so convert to screen coords
+        screen_center_x = self.width // 2
+        screen_center_y = int(self.height * 0.58)
+
+        agent_pos = state.main_agent.position
+        agent_screen_x = screen_center_x + int(agent_pos.x)
+        agent_screen_y = screen_center_y + int(agent_pos.y)
+
+        # Claude's head is above the ground position
+        head_y = agent_screen_y - int(px * 16)
 
         # Banner dimensions
         banner_h = int(px * 6)
         banner_w = int((len(display_text) * 7 + 16) * scale)
-        banner_x = center_x - banner_w // 2
+        banner_x = agent_screen_x - banner_w // 2
         banner_y = head_y - int(px * 12)  # Above Claude's head
+
+        # Clamp banner to screen bounds
+        banner_x = max(px * 2, min(banner_x, self.width - banner_w - px * 2))
+        banner_y = max(px * 2, banner_y)
 
         # Pulsing animation
         pulse = (self._frame_count % 30) < 15
@@ -1850,7 +2905,8 @@ class TerminalGraphicsRenderer:
         )
 
         # Small pointer/tail pointing down toward Claude
-        pointer_x = center_x
+        # Pointer points to actual agent position, but stays within banner bounds
+        pointer_x = max(banner_x + px * 3, min(agent_screen_x, banner_x + banner_w - px * 3))
         pointer_top = banner_y + banner_h
         pointer_bottom = pointer_top + px * 3
         self.draw.polygon(
@@ -1870,6 +2926,119 @@ class TerminalGraphicsRenderer:
         text_x = banner_x + int(8 * scale)
         text_y = banner_y + px
         self.draw.text((text_x, text_y), display_text, fill=self.COLORS["ui_text_dark"])
+
+    def _render_achievement_popups(self, state: GameState) -> None:
+        """Render achievement unlock popups sliding in from the right."""
+        if not hasattr(state, 'achievement_popups') or not state.achievement_popups:
+            return
+
+        scale = min(self.width / 800, self.height / 400)
+        scale = max(0.5, min(scale, 2.0))
+        px = max(2, self.height // 120)
+
+        # Stack popups from bottom-right
+        popup_h = int(50 * scale)
+        popup_w = int(180 * scale)
+        margin = int(10 * scale)
+        start_y = int(self.height * 0.3)
+
+        for i, popup in enumerate(state.achievement_popups[:3]):  # Max 3 visible
+            achievement = popup.achievement
+            progress = popup.progress
+
+            # Slide-in animation (first 0.2 of lifetime)
+            if progress < 0.1:
+                slide_progress = progress / 0.1
+                offset_x = int((1 - slide_progress) * (popup_w + margin))
+            # Slide-out animation (last 0.2 of lifetime)
+            elif progress > 0.8:
+                slide_progress = (progress - 0.8) / 0.2
+                offset_x = int(slide_progress * (popup_w + margin))
+            else:
+                offset_x = 0
+
+            popup_x = self.width - popup_w - margin + offset_x
+            popup_y = start_y + i * (popup_h + margin)
+
+            # Popup background with border
+            self.draw.rectangle(
+                [popup_x - px, popup_y - px, popup_x + popup_w + px, popup_y + popup_h + px],
+                fill=self.COLORS["outline"]
+            )
+            self.draw.rectangle(
+                [popup_x, popup_y, popup_x + popup_w, popup_y + popup_h],
+                fill=(50, 45, 60)
+            )
+
+            # Gold accent bar on left
+            accent_w = int(4 * scale)
+            self.draw.rectangle(
+                [popup_x, popup_y, popup_x + accent_w, popup_y + popup_h],
+                fill=self.COLORS["accent_primary"]
+            )
+
+            # Icon
+            icon_size = int(30 * scale)
+            icon_x = popup_x + accent_w + int(8 * scale)
+            icon_y = popup_y + (popup_h - icon_size) // 2
+            # Draw icon background circle
+            self.draw.ellipse(
+                [icon_x, icon_y, icon_x + icon_size, icon_y + icon_size],
+                fill=(80, 70, 100)
+            )
+            # Draw icon text (emoji)
+            icon_text_x = icon_x + icon_size // 2 - 4
+            icon_text_y = icon_y + icon_size // 2 - 6
+            self.draw.text((icon_text_x, icon_text_y), achievement.icon, fill=(255, 255, 255))
+
+            # Achievement text
+            text_x = icon_x + icon_size + int(8 * scale)
+
+            # "ACHIEVEMENT" header
+            header_y = popup_y + int(6 * scale)
+            self.draw.text(
+                (text_x, header_y),
+                "ACHIEVEMENT",
+                fill=(150, 140, 160)
+            )
+
+            # Achievement name
+            name_y = header_y + int(12 * scale)
+            name_color = self.COLORS["accent_primary"]
+            self.draw.text(
+                (text_x, name_y),
+                achievement.name,
+                fill=name_color
+            )
+
+            # Description (if space)
+            if popup_h > int(45 * scale):
+                desc_y = name_y + int(12 * scale)
+                # Truncate description if too long
+                desc_text = achievement.description
+                max_chars = int((popup_w - icon_size - 30) / 5)
+                if len(desc_text) > max_chars:
+                    desc_text = desc_text[:max_chars - 3] + "..."
+                self.draw.text(
+                    (text_x, desc_y),
+                    desc_text,
+                    fill=(120, 110, 130)
+                )
+
+            # Sparkle effect
+            if progress < 0.5:
+                sparkle_phase = progress * 10
+                for j in range(4):
+                    angle = sparkle_phase + j * math.pi / 2
+                    sparkle_x = popup_x + popup_w // 2 + int(math.cos(angle) * 30)
+                    sparkle_y = popup_y + popup_h // 2 + int(math.sin(angle) * 20)
+                    sparkle_size = int(3 * scale * (0.5 - progress))
+                    if sparkle_size > 0:
+                        self.draw.ellipse(
+                            [sparkle_x - sparkle_size, sparkle_y - sparkle_size,
+                             sparkle_x + sparkle_size, sparkle_y + sparkle_size],
+                            fill=self.COLORS["accent_primary"]
+                        )
 
     def _draw_rounded_rect(self, x1: int, y1: int, x2: int, y2: int,
                            radius: int, fill=None, outline=None) -> None:
@@ -1913,11 +3082,10 @@ class TerminalGraphicsRenderer:
 
     def _display_kitty(self) -> None:
         """Display using Kitty graphics protocol."""
-        # Clear tmux scrollback buffer periodically to prevent memory leak
-        if is_inside_tmux() and (self._frame_count - self._last_scrollback_clear) >= 300:
+        # Clear tmux scrollback every 100 frames to prevent memory leak
+        if is_inside_tmux() and (self._frame_count - self._last_scrollback_clear) >= 100:
             self._clear_tmux_scrollback()
             self._last_scrollback_clear = self._frame_count
-            self._first_frame = True  # Force full redraw after clear
 
         if self._first_frame:
             sys.stdout.write("\033[2J\033[H\033[?25l")
@@ -1928,30 +3096,32 @@ class TerminalGraphicsRenderer:
         buf = io.BytesIO()
         try:
             self.frame.save(buf, format="PNG")
-            data = base64.b64encode(buf.getvalue()).decode("ascii")
+            raw_data = buf.getvalue()
         finally:
             buf.close()
+            del buf
+
+        data = base64.b64encode(raw_data).decode("ascii")
+        del raw_data  # Free raw bytes
 
         chunk_size = 4096
-        chunks = [data[i:i+chunk_size] for i in range(0, len(data), chunk_size)]
-
-        for i, chunk in enumerate(chunks):
-            m = 1 if i < len(chunks) - 1 else 0
+        for i in range(0, len(data), chunk_size):
+            chunk = data[i:i+chunk_size]
+            m = 1 if i + chunk_size < len(data) else 0
             if i == 0:
                 sys.stdout.write(f"\033_Ga=T,f=100,m={m};{chunk}\033\\")
             else:
                 sys.stdout.write(f"\033_Gm={m};{chunk}\033\\")
 
+        del data  # Free base64 string
         sys.stdout.flush()
 
     def _display_iterm2(self) -> None:
         """Display using iTerm2 inline images."""
-        # Clear tmux scrollback buffer periodically to prevent memory leak
-        # iTerm2 images also accumulate in scrollback
-        if is_inside_tmux() and (self._frame_count - self._last_scrollback_clear) >= 300:
+        # Clear tmux scrollback every 100 frames to prevent memory leak
+        if is_inside_tmux() and (self._frame_count - self._last_scrollback_clear) >= 100:
             self._clear_tmux_scrollback()
             self._last_scrollback_clear = self._frame_count
-            self._first_frame = True  # Force full redraw after clear
 
         if self._first_frame:
             sys.stdout.write("\033[2J\033[H\033[?25l")
@@ -1962,16 +3132,22 @@ class TerminalGraphicsRenderer:
         buf = io.BytesIO()
         try:
             self.frame.save(buf, format="PNG")
-            data = base64.b64encode(buf.getvalue()).decode("ascii")
+            raw_data = buf.getvalue()
         finally:
             buf.close()
+            del buf
+
+        data = base64.b64encode(raw_data).decode("ascii")
+        del raw_data  # Free raw bytes
 
         if is_inside_tmux():
             self._display_iterm2_multipart(data)
         else:
             img_seq = f"\033]1337;File=inline=1;width={self.width}px;height={self.height}px;preserveAspectRatio=0:{data}\007"
             sys.stdout.write(img_seq)
+            del img_seq
 
+        del data  # Free base64 string
         sys.stdout.flush()
 
     def _display_iterm2_multipart(self, data: str) -> None:
@@ -2001,13 +3177,11 @@ class TerminalGraphicsRenderer:
                 self._first_frame = False
             return
 
-        # Clear tmux scrollback buffer periodically to prevent memory leak
-        # This is critical - terminals accumulate sixel data in scrollback
-        # Clear every 300 frames (~10 seconds at 30fps)
+        # Clear tmux scrollback every 300 frames to prevent memory leak
+        # Do NOT set _first_frame = True - that causes visible flicker
         if is_inside_tmux() and (self._frame_count - self._last_scrollback_clear) >= 300:
             self._clear_tmux_scrollback()
             self._last_scrollback_clear = self._frame_count
-            self._first_frame = True  # Force full redraw after clear
 
         if self._first_frame:
             sys.stdout.write("\033[2J\033[H\033[?25l")
@@ -2019,7 +3193,7 @@ class TerminalGraphicsRenderer:
         tmp_path = "/tmp/claude_world_frame.png"
         self.frame.save(tmp_path, format="PNG")
 
-        # Get current terminal pixel size
+        # Get current terminal size for scaling
         pixel_width, pixel_height = self._get_terminal_pixel_size()
 
         try:
@@ -2039,16 +3213,7 @@ class TerminalGraphicsRenderer:
 
     def _clear_tmux_scrollback(self) -> None:
         """Clear tmux pane scrollback buffer to free terminal memory."""
-        import subprocess
-        try:
-            # Clear scrollback history for current pane
-            subprocess.run(
-                ["tmux", "clear-history"],
-                capture_output=True,
-                timeout=1,
-            )
-        except Exception:
-            pass
+        clear_tmux_scrollback()
 
     def force_clear(self) -> None:
         """Force a full screen clear on next frame."""
