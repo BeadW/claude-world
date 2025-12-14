@@ -260,6 +260,19 @@ class TerminalGraphicsRenderer(WorldObjectsMixin):
         self.pane_rows = pane_rows
         self.protocol = detect_graphics_protocol()
 
+        # Disable scrollback for this pane to prevent sixel data accumulation
+        # This is critical for memory management - sixel data is huge
+        if is_inside_tmux():
+            import subprocess
+            try:
+                subprocess.run(
+                    ["tmux", "set-option", "-p", "history-limit", "0"],
+                    capture_output=True,
+                    timeout=1,
+                )
+            except Exception:
+                pass
+
         # Store cell size for pane size calculations
         self._cell_width, self._cell_height = self._get_cell_size()
 
