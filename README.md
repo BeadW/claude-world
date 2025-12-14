@@ -2,6 +2,7 @@
 
 An animated idle game that reacts to Claude Code sessions. Watch a charming animated agent explore procedurally generated worlds while you work with Claude.
 
+
 <img width="1462" height="412" alt="image" src="https://github.com/user-attachments/assets/573ea35c-d10d-4f65-9342-e99229e96202" />
 
 ## Overview
