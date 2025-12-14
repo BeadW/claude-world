@@ -3178,24 +3178,24 @@ class TerminalGraphicsRenderer(WorldObjectsMixin):
                 self._first_frame = False
             return
 
-        if self._first_frame:
-            sys.stdout.write("\033[2J\033[H\033[?25l")
-            self._first_frame = False
-        else:
-            sys.stdout.write("\033[H")
-        sys.stdout.flush()
-
         tmp_path = "/tmp/claude_world_frame.png"
         self.frame.save(tmp_path, format="PNG")
 
         try:
             import subprocess
-            # No scaling - output at native frame size
+            # Force exact pixel dimensions to prevent auto-scaling flickering
             result = subprocess.run(
-                ["img2sixel", tmp_path],
+                ["img2sixel", "-w", f"{self.width}px", "-h", f"{self.height}px", tmp_path],
                 capture_output=True,
             )
             if result.returncode == 0:
+                # Combine cursor positioning with sixel output to prevent flicker
+                # Don't flush between cursor move and image - do it all at once
+                if self._first_frame:
+                    sys.stdout.write("\033[2J\033[H\033[?25l")
+                    self._first_frame = False
+                else:
+                    sys.stdout.write("\033[H")
                 sys.stdout.buffer.write(result.stdout)
                 sys.stdout.flush()
             # Explicitly delete result to free subprocess buffers

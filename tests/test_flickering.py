@@ -16,6 +16,7 @@ from __future__ import annotations
 import io
 import os
 import re
+import subprocess
 import sys
 from contextlib import contextmanager
 from unittest.mock import patch, MagicMock
@@ -390,15 +391,24 @@ class TestNoDoubleRender:
 class TestSixelScaling:
     """Tests for sixel scaling issues that cause flickering."""
 
-    def test_img2sixel_called_without_scaling_args(self, mock_game_state):
-        """Test img2sixel is called without auto-scaling arguments."""
-        called_args = []
+    def test_img2sixel_called_with_exact_pixel_dimensions(self, mock_game_state):
+        """Test img2sixel is called with exact pixel dimensions to prevent flickering."""
+        img2sixel_calls = []
+
+        original_run = subprocess.run
 
         def capture_run(args, **kwargs):
-            called_args.append(args)
+            # Only capture img2sixel calls, let tmux calls through
+            if args and "img2sixel" in str(args[0]):
+                img2sixel_calls.append(list(args))
+                result = MagicMock()
+                result.returncode = 0
+                result.stdout = b"\033Pq~-\033\\"
+                return result
+            # For tmux and other calls, return success
             result = MagicMock()
             result.returncode = 0
-            result.stdout = b"\033Pq~-\033\\"
+            result.stdout = b""
             return result
 
         with patch.object(TerminalGraphicsRenderer, '_get_terminal_pixel_size', return_value=(800, 400)):
@@ -410,15 +420,18 @@ class TestSixelScaling:
                                 renderer = TerminalGraphicsRenderer(width=800, height=400)
                                 renderer.render_frame(mock_game_state)
 
-        assert len(called_args) > 0, "img2sixel was not called"
-        args = called_args[0]
+        assert len(img2sixel_calls) > 0, "img2sixel was not called"
+        args = img2sixel_calls[0]
 
-        # Check that no scaling options are passed
-        # -w (width) and -h (height) options would cause scaling
-        assert "-w" not in args, "img2sixel should not have -w scaling"
-        assert "-h" not in args, "img2sixel should not have -h scaling"
-        assert "--width" not in args, "img2sixel should not have --width scaling"
-        assert "--height" not in args, "img2sixel should not have --height scaling"
+        # Check that exact pixel dimensions are passed to prevent auto-scaling
+        assert "-w" in args, "img2sixel should have -w for exact width"
+        assert "-h" in args, "img2sixel should have -h for exact height"
+
+        # Verify the exact dimensions match renderer size
+        w_idx = args.index("-w")
+        h_idx = args.index("-h")
+        assert args[w_idx + 1] == "800px", f"Width should be 800px, got {args[w_idx + 1]}"
+        assert args[h_idx + 1] == "400px", f"Height should be 400px, got {args[h_idx + 1]}"
 
     def test_frame_saved_at_correct_size_for_sixel(self, mock_game_state):
         """Test the PNG saved for sixel is at renderer's native size."""
