@@ -9,6 +9,9 @@ import sys
 # Cache cell size to prevent oscillation when pane resizes
 _cached_cell_size: tuple[int, int] | None = None
 
+# Cache terminal pixel size to prevent jitter during rendering
+_cached_pixel_size: tuple[int, int] | None = None
+
 # Fixed aspect ratio for game (width:height)
 ASPECT_RATIO = 2.5  # 2.5:1 ratio gives a nice wide game view
 
@@ -88,7 +91,13 @@ def get_terminal_pixel_size() -> tuple[int, int]:
 
     Uses ioctl to get actual pixel dimensions if available,
     otherwise estimates from character dimensions.
+    Result is cached to prevent jitter during rendering.
     """
+    global _cached_pixel_size
+
+    if _cached_pixel_size is not None:
+        return _cached_pixel_size
+
     import fcntl
     import struct
     import subprocess
@@ -105,7 +114,8 @@ def get_terminal_pixel_size() -> tuple[int, int]:
 
     # If ioctl gave us pixel size, use it
     if xpixel > 0 and ypixel > 0:
-        return xpixel, ypixel
+        _cached_pixel_size = (xpixel, ypixel)
+        return _cached_pixel_size
 
     # Otherwise, get character dimensions and estimate
     if is_inside_tmux():
@@ -125,7 +135,8 @@ def get_terminal_pixel_size() -> tuple[int, int]:
         cols, rows = shutil.get_terminal_size()
 
     # Estimate pixels - typical cell is ~9x18 pixels
-    return cols * 9, rows * 18
+    _cached_pixel_size = (cols * 9, rows * 18)
+    return _cached_pixel_size
 
 
 def get_cell_size() -> tuple[int, int]:
