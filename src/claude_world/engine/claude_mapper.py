@@ -8,6 +8,44 @@ from typing import Any
 from claude_world.types import AgentActivity, TOOL_ACTIVITY_MAP, TOOL_XP_REWARDS
 
 
+# Session tracking for routing events to agents
+# Maps session_id -> agent_id (None means main agent)
+_session_to_agent: dict[str, str | None] = {}
+_main_session_id: str | None = None
+
+
+def register_main_session(session_id: str) -> None:
+    """Register the main session ID."""
+    global _main_session_id
+    _main_session_id = session_id
+    _session_to_agent[session_id] = None  # None = main agent
+
+
+def register_agent_session(session_id: str, agent_id: str) -> None:
+    """Register a subagent session."""
+    _session_to_agent[session_id] = agent_id
+
+
+def unregister_agent_session(agent_id: str) -> None:
+    """Unregister a subagent session."""
+    # Find and remove session for this agent
+    to_remove = [sid for sid, aid in _session_to_agent.items() if aid == agent_id]
+    for sid in to_remove:
+        del _session_to_agent[sid]
+
+
+def get_agent_for_session(session_id: str) -> str | None:
+    """Get the agent ID for a session (None = main agent)."""
+    # If session not registered, try to infer
+    if session_id not in _session_to_agent:
+        # If we have a main session and this isn't it, it's probably a subagent
+        if _main_session_id and session_id != _main_session_id:
+            # Unknown subagent session - return a placeholder
+            return f"unknown-{session_id[:8]}" if session_id else None
+        return None  # Assume main agent
+    return _session_to_agent[session_id]
+
+
 class EffectType(Enum):
     """Types of visual effects."""
 
@@ -52,21 +90,30 @@ def map_claude_event(event: dict[str, Any]) -> list[dict[str, Any]]:
     payload = event.get("payload", {})
     game_events: list[dict[str, Any]] = []
 
+    # Extract session_id to determine which agent this event is for
+    session_id = payload.get("session_id", "")
+    agent_id = get_agent_for_session(session_id) if session_id else None
+
     if event_type == "TOOL_START":
         tool_name = payload.get("tool_name", "")
         activity = TOOL_ACTIVITY_MAP.get(tool_name, AgentActivity.BUILDING)
 
         # Activity change event - include tool name for verb display
+        # Include agent_id to route to correct agent
         game_events.append({
             "type": "CHANGE_ACTIVITY",
-            "data": {"activity": activity, "tool_name": tool_name},
+            "data": {
+                "activity": activity,
+                "tool_name": tool_name,
+                "agent_id": agent_id,
+            },
         })
 
         # Particle effect event
         effect = get_tool_effect(tool_name)
         game_events.append({
             "type": "SPAWN_PARTICLES",
-            "data": {"effect": effect},
+            "data": {"effect": effect, "agent_id": agent_id},
         })
 
         # If it's a Task tool, also spawn an agent
@@ -74,12 +121,12 @@ def map_claude_event(event: dict[str, Any]) -> list[dict[str, Any]]:
             tool_input = payload.get("tool_input", {})
             agent_type = tool_input.get("subagent_type", "general-purpose")
             description = tool_input.get("description", "")
-            agent_id = payload.get("tool_use_id", "")
+            new_agent_id = payload.get("tool_use_id", "")
 
             game_events.append({
                 "type": "SPAWN_AGENT",
                 "data": {
-                    "agent_id": agent_id,
+                    "agent_id": new_agent_id,
                     "agent_type": agent_type,
                     "description": description,
                 },
@@ -100,9 +147,14 @@ def map_claude_event(event: dict[str, Any]) -> list[dict[str, Any]]:
         })
 
         # Return to idle after tool complete (clear tool name)
+        # Include agent_id to route to correct agent
         game_events.append({
             "type": "CHANGE_ACTIVITY",
-            "data": {"activity": AgentActivity.IDLE, "tool_name": None},
+            "data": {
+                "activity": AgentActivity.IDLE,
+                "tool_name": None,
+                "agent_id": agent_id,
+            },
         })
 
     elif event_type == "AGENT_SPAWN":

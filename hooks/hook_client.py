@@ -24,8 +24,9 @@ async def send_event(event: dict) -> bool:
         return False
 
     try:
-        reader, writer = await asyncio.open_unix_connection(
-            path=str(socket_path)
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_unix_connection(path=str(socket_path)),
+            timeout=1.0
         )
 
         # Serialize event
@@ -34,16 +35,22 @@ async def send_event(event: dict) -> bool:
         # Send length prefix + data
         writer.write(len(data).to_bytes(4, "big"))
         writer.write(data)
-        await writer.drain()
+        await asyncio.wait_for(writer.drain(), timeout=1.0)
 
-        # Wait for acknowledgment
-        response = await reader.read(2)
+        # Wait for acknowledgment with timeout
+        response = await asyncio.wait_for(reader.read(2), timeout=1.0)
         writer.close()
         await writer.wait_closed()
 
         return response == b"OK"
 
-    except (ConnectionRefusedError, FileNotFoundError):
+    except Exception as e:
+        # Log error for debugging
+        try:
+            with open("/tmp/claude_world_hook_error.log", "a") as f:
+                f.write(f"Hook error: {e}\n")
+        except Exception:
+            pass
         return False
 
 
@@ -75,6 +82,9 @@ def main():
     hook_type = args.hook_type.lower()
     timestamp = time.time()
 
+    # Extract session_id if available (helps identify main vs subagent)
+    session_id = hook_data.get("session_id", "")
+
     if hook_type == "pretooluse":
         event = {
             "type": "TOOL_START",
@@ -83,6 +93,7 @@ def main():
                 "tool_name": hook_data.get("tool_name", "unknown"),
                 "tool_input": hook_data.get("tool_input", {}),
                 "tool_use_id": hook_data.get("tool_use_id", f"tool-{timestamp}"),
+                "session_id": session_id,
             },
         }
     elif hook_type == "posttooluse":
@@ -92,6 +103,7 @@ def main():
             "payload": {
                 "tool_name": hook_data.get("tool_name", "unknown"),
                 "tool_response": hook_data.get("tool_response", ""),
+                "session_id": session_id,
             },
         }
     elif hook_type == "sessionstart":
@@ -108,7 +120,7 @@ def main():
             "timestamp": timestamp,
             "payload": {},
         }
-    elif hook_type == "subagentspawn":
+    elif hook_type == "subagentspawn" or hook_type == "subagentstart":
         event = {
             "type": "AGENT_SPAWN",
             "timestamp": timestamp,
@@ -116,6 +128,7 @@ def main():
                 "agent_id": hook_data.get("agent_id", f"agent-{timestamp}"),
                 "agent_type": hook_data.get("agent_type", "general"),
                 "description": hook_data.get("description", ""),
+                "session_id": session_id,
             },
         }
     elif hook_type == "subagentstop":
@@ -125,6 +138,7 @@ def main():
             "payload": {
                 "agent_id": hook_data.get("agent_id", ""),
                 "success": hook_data.get("success", True),
+                "session_id": session_id,
             },
         }
     elif hook_type == "userpromptsubmit":

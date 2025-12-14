@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import math
+import random
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from claude_world.types import GameState
+
+from claude_world.types import EntityType, Position
 
 
 class MovementSystem:
@@ -39,6 +42,11 @@ class MovementSystem:
 
         # Update other entities
         for entity in state.entities.values():
+            # Subagents get autonomous wandering behavior
+            if entity.type == EntityType.SUB_AGENT:
+                self._update_subagent_wandering(entity, main, dt)
+                self._update_agent_movement(entity, dt)
+
             entity.position.x += entity.velocity.x * dt
             entity.position.y += entity.velocity.y * dt
             entity.velocity.x *= self._friction
@@ -52,6 +60,38 @@ class MovementSystem:
 
         # Remove dead particles
         state.particles = [p for p in state.particles if not p.is_dead]
+
+    def _update_subagent_wandering(self, agent, main_agent, dt: float) -> None:
+        """Give subagents autonomous wandering behavior around the main agent.
+
+        Subagents will periodically pick a new target location near the main
+        agent and walk there, making them appear to be actively exploring.
+        """
+        # Skip if already walking to a target
+        if agent.is_walking and agent.target_position is not None:
+            return
+
+        # Random chance to start wandering each frame (average ~2-4 seconds idle)
+        if random.random() > dt * 0.4:  # ~40% chance per second
+            return
+
+        # Pick a random offset from the main agent's position
+        # Subagents wander in a 120px radius around main Claude
+        wander_radius = 120
+        angle = random.uniform(0, 2 * math.pi)
+        distance = random.uniform(30, wander_radius)
+
+        target_x = main_agent.position.x + math.cos(angle) * distance
+        target_y = main_agent.position.y + math.sin(angle) * distance
+
+        # Clamp to reasonable bounds (stay on screen area)
+        target_x = max(-180, min(180, target_x))
+        target_y = max(-100, min(100, target_y))
+
+        # Set the target and start walking
+        agent.target_position = Position(target_x, target_y)
+        agent.is_walking = True
+        agent.move_speed = random.uniform(60, 100)  # Subagents move a bit slower
 
     def _update_agent_movement(self, agent, dt: float) -> None:
         """Update agent movement toward target position."""

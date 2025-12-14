@@ -267,6 +267,19 @@ class TerminalGraphicsRenderer(WorldObjectsMixin):
         self.pane_rows = pane_rows
         self.protocol = detect_graphics_protocol()
 
+        # Disable scrollback for this pane to prevent sixel data accumulation
+        # This avoids the need for periodic clear-history which causes flickering
+        if is_inside_tmux():
+            import subprocess
+            try:
+                subprocess.run(
+                    ["tmux", "set-option", "-p", "history-limit", "0"],
+                    capture_output=True,
+                    timeout=1,
+                )
+            except Exception:
+                pass
+
         # Store cell size for pane size calculations
         self._cell_width, self._cell_height = self._get_cell_size()
 
@@ -3177,12 +3190,6 @@ class TerminalGraphicsRenderer(WorldObjectsMixin):
                 self._first_frame = False
             return
 
-        # Clear tmux scrollback every 300 frames to prevent memory leak
-        # Do NOT set _first_frame = True - that causes visible flicker
-        if is_inside_tmux() and (self._frame_count - self._last_scrollback_clear) >= 300:
-            self._clear_tmux_scrollback()
-            self._last_scrollback_clear = self._frame_count
-
         if self._first_frame:
             sys.stdout.write("\033[2J\033[H\033[?25l")
             self._first_frame = False
@@ -3195,9 +3202,9 @@ class TerminalGraphicsRenderer(WorldObjectsMixin):
 
         try:
             import subprocess
-            # Use fixed frame size for consistent output - no dynamic scaling
+            # No scaling - output at native frame size
             result = subprocess.run(
-                ["img2sixel", "-w", str(self.width), "-h", str(self.height), tmp_path],
+                ["img2sixel", tmp_path],
                 capture_output=True,
             )
             if result.returncode == 0:
@@ -3207,6 +3214,12 @@ class TerminalGraphicsRenderer(WorldObjectsMixin):
             del result
         except Exception:
             pass
+
+        # Scrollback should be disabled via history-limit=0 at startup
+        # This periodic clear is a backup in case that didn't work
+        if is_inside_tmux() and (self._frame_count - self._last_scrollback_clear) >= 900:
+            self._clear_tmux_scrollback()
+            self._last_scrollback_clear = self._frame_count
 
     def _clear_tmux_scrollback(self) -> None:
         """Clear tmux pane scrollback buffer to free terminal memory."""
