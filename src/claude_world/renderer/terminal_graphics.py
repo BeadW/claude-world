@@ -533,43 +533,46 @@ class TerminalGraphicsRenderer(WorldObjectsMixin):
         self._draw_ambient_particles(frame, state.world.time_of_day.phase, px)
 
     def _draw_world_objects(self, center_x: int, center_y: int, px: int, frame: int, state: GameState) -> None:
-        """Draw interactive objects at world locations - spread across the island."""
-        # Get Claude's current location to highlight active objects
+        """Draw interactive objects at world locations - matching WORLD_LOCATIONS in entity.py."""
         current_loc = state.main_agent.current_location
 
-        # Palm tree reading spot (far left) - for reading/resting
-        palm_x = center_x - 140
-        palm_y = center_y - 30
+        # Positions match WORLD_LOCATIONS in entity.py (relative offsets from center)
+        # Scale factor converts entity coords to pixel coords
+        scale = px * 1.5
+
+        # Palm tree reading spot - Position(-170, -50)
+        palm_x = center_x + int(-170 * scale / px)
+        palm_y = center_y + int(-50 * scale / px)
         self._draw_reading_palm(palm_x, palm_y, px, frame, active=(current_loc == "palm_tree"))
 
-        # Rock pile (far right) - for searching/bashing
-        rock_x = center_x + 130
-        rock_y = center_y + 50
+        # Rock pile - Position(170, 60)
+        rock_x = center_x + int(170 * scale / px)
+        rock_y = center_y + int(60 * scale / px)
         self._draw_rock_pile(rock_x, rock_y, px, frame, active=(current_loc == "rock_pile"))
 
-        # Sandy patch (lower left) - for writing/building
-        sand_x = center_x - 100
-        sand_y = center_y + 60
+        # Sandy patch - Position(-130, 80)
+        sand_x = center_x + int(-130 * scale / px)
+        sand_y = center_y + int(80 * scale / px)
         self._draw_sand_patch(sand_x, sand_y, px, frame, active=(current_loc == "sand_patch"))
 
-        # Tide pool (right edge near water) - for fetching
-        pool_x = center_x + 150
-        pool_y = center_y - 20
+        # Tide pool - Position(160, -60)
+        pool_x = center_x + int(160 * scale / px)
+        pool_y = center_y + int(-60 * scale / px)
         self._draw_tide_pool(pool_x, pool_y, px, frame, active=(current_loc == "tide_pool"))
 
-        # Bushes (lower right) - for searching
-        bush_x = center_x + 100
-        bush_y = center_y + 70
+        # Bushes - Position(120, 30)
+        bush_x = center_x + int(120 * scale / px)
+        bush_y = center_y + int(30 * scale / px)
         self._draw_bush(bush_x, bush_y, px, frame, active=(current_loc == "bushes"))
 
-        # Message bottle at shore (far left)
-        bottle_x = center_x - 150
-        bottle_y = center_y + 30
+        # Message bottle at shore - Position(-180, 70)
+        bottle_x = center_x + int(-180 * scale / px)
+        bottle_y = center_y + int(70 * scale / px)
         self._draw_message_bottle(bottle_x, bottle_y, px, frame, active=(current_loc == "shore"))
 
-        # Thinking spot marker on hilltop (upper center)
-        hilltop_x = center_x
-        hilltop_y = center_y - 70
+        # Thinking spot on hilltop - Position(80, -80)
+        hilltop_x = center_x + int(80 * scale / px)
+        hilltop_y = center_y + int(-80 * scale / px)
         self._draw_thinking_spot(hilltop_x, hilltop_y, px, frame, active=(current_loc == "hilltop"))
 
     def _draw_reading_palm(self, x: int, y: int, px: int, frame: int, active: bool = False) -> None:
@@ -3190,14 +3193,11 @@ class TerminalGraphicsRenderer(WorldObjectsMixin):
         tmp_path = "/tmp/claude_world_frame.png"
         self.frame.save(tmp_path, format="PNG")
 
-        # Get current terminal size for scaling
-        pixel_width, pixel_height = self._get_terminal_pixel_size()
-
         try:
             import subprocess
-            # Scale to fill terminal - use both width and height
+            # Use fixed frame size for consistent output - no dynamic scaling
             result = subprocess.run(
-                ["img2sixel", "-w", str(pixel_width), "-h", str(pixel_height), tmp_path],
+                ["img2sixel", "-w", str(self.width), "-h", str(self.height), tmp_path],
                 capture_output=True,
             )
             if result.returncode == 0:
