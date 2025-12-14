@@ -438,7 +438,7 @@ class WorldObjectsMixin:
         self._safe_ellipse([qmark_x - px//2, qmark_y + px//2, qmark_x + px//2, qmark_y + px], fill=(80, 80, 80))
 
         if active:
-            glow = abs(math.sin(frame * 0.12))
+            abs(math.sin(frame * 0.12))
             glow_color = (255, 255, 200)
             self.draw.ellipse([x - px*5, mailbox_y - px*3, x + px*5, mailbox_y + px*3], fill=glow_color)
             self.draw.rectangle([x - px*4, mailbox_y - px*2, x + px*4, mailbox_y + px*2], fill=wood_color)
@@ -528,7 +528,7 @@ class WorldObjectsMixin:
             base_x = random.randint(0, self.width)
             base_y = random.randint(int(self.height * 0.25), int(self.height * 0.85))
             speed_x = random.uniform(0.3, 0.8)
-            speed_y = random.uniform(0.1, 0.3)
+            random.uniform(0.1, 0.3)
             phase_offset = random.uniform(0, math.pi * 2)
 
             x = int((base_x + frame * speed_x) % self.width)

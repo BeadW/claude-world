@@ -93,65 +93,6 @@ class Application:
 
         self._initialized = True
 
-    def _create_initial_state(self) -> GameState:
-        """Create the initial game state.
-
-        Returns:
-            Initial GameState.
-        """
-        # Create terrain (simple placeholder)
-        width, height = 1000, 1000
-        heightmap = np.zeros((height // 10, width // 10), dtype=np.float32)
-        tiles = np.full((height // 10, width // 10), 2, dtype=np.uint8)  # Sand
-
-        terrain = TerrainData(
-            heightmap=heightmap,
-            tiles=tiles,
-            decorations=[],
-        )
-
-        # Create world state
-        world = WorldState(
-            name=self.world_name,
-            width=width,
-            height=height,
-            terrain=terrain,
-            water_offset=0.0,
-            weather=WeatherState(
-                type="clear",
-                intensity=0.0,
-                wind_direction=45.0,
-                wind_speed=5.0,
-            ),
-            time_of_day=TimeOfDay(hour=10.0),  # 10 AM
-            ambient_light=(255, 255, 255),
-        )
-
-        # Create main agent
-        main_agent = AgentEntity(
-            id="main_agent",
-            type=EntityType.MAIN_AGENT,
-            position=Position(500.0, 500.0),
-            velocity=Velocity(0.0, 0.0),
-            sprite_id="claude_main",
-            animation=AnimationState(current_animation="idle"),
-            agent_type="main",
-            activity=AgentActivity.IDLE,
-            mood=AgentMood.NEUTRAL,
-        )
-
-        # Create game state
-        return GameState(
-            world=world,
-            entities={main_agent.id: main_agent},
-            main_agent=main_agent,
-            particles=[],
-            resources=Resources(),
-            progression=Progression(),
-            camera=Camera(x=500, y=500, target="main_agent"),
-            session_active=False,
-        )
-
     async def _handle_event(self, event: dict) -> None:
         """Handle an incoming event.
 

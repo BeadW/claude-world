@@ -163,29 +163,14 @@ def display_sixel(frame: Image.Image, first_frame: bool) -> bool:
     return False
 
 
-_pending_clear_process = None
-
 def clear_tmux_scrollback() -> None:
-    """Clear tmux pane scrollback buffer to free terminal memory.
-
-    Manages a single background process to avoid accumulation.
-    """
-    global _pending_clear_process
+    """Clear tmux pane scrollback buffer to free terminal memory."""
     import subprocess
-
-    # Clean up previous process if done
-    if _pending_clear_process is not None:
-        if _pending_clear_process.poll() is not None:
-            _pending_clear_process = None
-        else:
-            # Previous clear still running, skip this one
-            return
-
     try:
-        _pending_clear_process = subprocess.Popen(
+        subprocess.run(
             ["tmux", "clear-history"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=1,
         )
     except Exception:
         pass

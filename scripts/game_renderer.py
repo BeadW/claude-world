@@ -182,8 +182,8 @@ class GameRenderer:
         if hasattr(signal, 'SIGWINCH'):
             signal.signal(signal.SIGWINCH, self.handle_resize)
 
-        # Enable focus reporting
-        self.renderer.enable_focus_reporting()
+        # Focus reporting disabled - was causing flicker
+        # self.renderer.enable_focus_reporting()
 
         # Set up event, query, and action handlers
         self.event_bridge.on_event = self.handle_event
@@ -207,8 +207,8 @@ class GameRenderer:
             self.game_loop.start()
 
             while self._running:
-                # Check for focus events
-                self.check_focus_events()
+                # Focus events disabled - was causing flicker
+                # self.check_focus_events()
 
                 if self._has_focus:
                     self.game_loop.process_frame()

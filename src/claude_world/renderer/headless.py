@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-import math
 from typing import TYPE_CHECKING
 
 from claude_world.types import Position, TerrainType
@@ -86,7 +85,6 @@ class HeadlessRenderer:
 
         # Fill sky based on time of day
         if phase == "night":
-            sky_char = "."  # Stars
             for y in range(3):
                 for x in range(self.width):
                     if (x + y) % 7 == 0:
@@ -141,7 +139,6 @@ class HeadlessRenderer:
     def _render_water(self, state: GameState) -> None:
         """Add water animation effect."""
         offset = state.world.water_offset
-        terrain = state.world.terrain
 
         # Animate water tiles
         ui_height = 3

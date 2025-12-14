@@ -5,13 +5,12 @@ from __future__ import annotations
 import base64
 import io
 import math
-import os
 import shutil
 import sys
 from typing import TYPE_CHECKING, Tuple
 
 try:
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageDraw
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False
@@ -33,13 +32,7 @@ from claude_world.renderer.terminal_size import (
 from claude_world.renderer.display import (
     detect_graphics_protocol,
     tmux_wrap,
-    display_kitty,
-    display_iterm2,
-    display_sixel,
     clear_tmux_scrollback,
-    enable_focus_reporting as _enable_focus_reporting,
-    disable_focus_reporting as _disable_focus_reporting,
-    cleanup_terminal,
 )
 from claude_world.renderer.world_objects import WorldObjectsMixin
 
@@ -267,19 +260,6 @@ class TerminalGraphicsRenderer(WorldObjectsMixin):
         self.pane_rows = pane_rows
         self.protocol = detect_graphics_protocol()
 
-        # Disable scrollback for this pane to prevent sixel data accumulation
-        # This avoids the need for periodic clear-history which causes flickering
-        if is_inside_tmux():
-            import subprocess
-            try:
-                subprocess.run(
-                    ["tmux", "set-option", "-p", "history-limit", "0"],
-                    capture_output=True,
-                    timeout=1,
-                )
-            except Exception:
-                pass
-
         # Store cell size for pane size calculations
         self._cell_width, self._cell_height = self._get_cell_size()
 
@@ -367,7 +347,7 @@ class TerminalGraphicsRenderer(WorldObjectsMixin):
             self._render_achievement_popups(state)
             self._render_level_up_overlay(state)
             self._display_frame()
-        except Exception as e:
+        except Exception:
             # Log error to file for debugging
             with open("/tmp/claude_world_error.log", "a") as f:
                 f.write(f"\n--- Error at frame {self._frame_count} ---\n")
@@ -625,12 +605,12 @@ class TerminalGraphicsRenderer(WorldObjectsMixin):
         for angle_offset, length_mult in fronds:
             angle = math.pi / 2 + angle_offset + sway * 0.02
             frond_len = px * 8 * length_mult
-            end_x = x + sway + int(math.cos(angle) * frond_len)
-            end_y = frond_base_y + int(math.sin(angle) * frond_len * 0.3)
+            x + sway + int(math.cos(angle) * frond_len)
+            frond_base_y + int(math.sin(angle) * frond_len * 0.3)
 
             # Draw frond as elongated shape
-            mid_x = x + sway + int(math.cos(angle) * frond_len * 0.5)
-            mid_y = frond_base_y + int(math.sin(angle) * frond_len * 0.15)
+            x + sway + int(math.cos(angle) * frond_len * 0.5)
+            frond_base_y + int(math.sin(angle) * frond_len * 0.15)
 
             # Frond segments
             for j in range(3):
@@ -923,7 +903,6 @@ class TerminalGraphicsRenderer(WorldObjectsMixin):
         bush_dark = (55, 105, 45)
         outline = self.COLORS["outline"]
         berry_red = (200, 60, 70)
-        berry_dark = (150, 40, 50)
 
         # Ground shadow
         shadow_color = (60, 100, 50) if not active else (80, 120, 70)
@@ -1044,7 +1023,7 @@ class TerminalGraphicsRenderer(WorldObjectsMixin):
         # When active, show message being sent
         if active:
             # Glowing mailbox
-            glow = abs(math.sin(frame * 0.12))
+            abs(math.sin(frame * 0.12))
             glow_color = (255, 255, 200)
             self.draw.ellipse([x - px*5, mailbox_y - px*3, x + px*5, mailbox_y + px*3], fill=glow_color)
             # Redraw mailbox on glow
@@ -1075,7 +1054,6 @@ class TerminalGraphicsRenderer(WorldObjectsMixin):
         outline = self.COLORS["outline"]
         stone_base = (160, 155, 150)
         stone_light = (190, 185, 180)
-        stone_dark = (120, 115, 110)
 
         # Ground shadow
         self.draw.ellipse([x - px*6, y + px*2, x + px*6, y + px*4], fill=(60, 100, 50))
@@ -1111,7 +1089,6 @@ class TerminalGraphicsRenderer(WorldObjectsMixin):
         if active:
             # Glowing aura around pedestal
             aura_pulse = int(abs(math.sin(frame * 0.08)) * px * 2)
-            aura_color = (255, 255, 200, 100)
             self.draw.ellipse([x - px*6 - aura_pulse, y - px*4 - aura_pulse,
                              x + px*6 + aura_pulse, y + px*3 + aura_pulse], fill=(255, 255, 220))
 
@@ -1155,7 +1132,7 @@ class TerminalGraphicsRenderer(WorldObjectsMixin):
             base_x = random.randint(0, self.width)
             base_y = random.randint(int(self.height * 0.25), int(self.height * 0.85))
             speed_x = random.uniform(0.3, 0.8)
-            speed_y = random.uniform(0.1, 0.3)
+            random.uniform(0.1, 0.3)
             phase_offset = random.uniform(0, math.pi * 2)
 
             # Animate position
@@ -1309,8 +1286,8 @@ class TerminalGraphicsRenderer(WorldObjectsMixin):
         scale = self.height / 350
 
         # Character dimensions
-        char_w = int(px * 14)
-        char_h = int(px * 18)
+        int(px * 14)
+        int(px * 18)
 
         # Base position from game state - offset from screen center
         screen_center_x = self.width // 2
@@ -1357,9 +1334,8 @@ class TerminalGraphicsRenderer(WorldObjectsMixin):
                 look_dir = 0   # Hold center
 
         # Occasional head tilt during thinking
-        head_tilt = 0
         if activity == "thinking" and not is_walking:
-            head_tilt = int(math.sin(frame * 0.03) * px)
+            int(math.sin(frame * 0.03) * px)
 
         # Activity-specific movement only when not walking
         if not is_walking:
@@ -2236,7 +2212,7 @@ class TerminalGraphicsRenderer(WorldObjectsMixin):
 
         scale = min(self.width / 800, self.height / 400)
         scale = max(0.5, min(scale, 2.0))
-        px = max(2, self.height // 120)
+        max(2, self.height // 120)
 
         # Position spinner to the right of Claude
         center_x = self.width // 2
@@ -2528,10 +2504,10 @@ class TerminalGraphicsRenderer(WorldObjectsMixin):
 
             # Banner position - centered, above Claude
             banner_y = int(self.height * 0.25)
-            banner_text = f"LEVEL UP!"
+            banner_text = "LEVEL UP!"
 
             # Pulsing scale effect
-            pulse = 1.0 + 0.1 * math.sin(self._frame_count * 0.3)
+            1.0 + 0.1 * math.sin(self._frame_count * 0.3)
 
             # Gold color with fade
             gold = (255, 215, 0)
@@ -2661,8 +2637,7 @@ class TerminalGraphicsRenderer(WorldObjectsMixin):
         if xp_pct > 0.8:
             glow_intensity = (xp_pct - 0.8) / 0.2  # 0 to 1
             glow_pulse = 0.5 + 0.5 * math.sin(self._frame_count * 0.2)
-            glow_alpha = int(glow_intensity * glow_pulse * 60)
-            glow_color = (200, 100, 255, glow_alpha)
+            int(glow_intensity * glow_pulse * 60)
             # Draw glow around bar
             for glow_offset in range(1, 4):
                 self.draw.rectangle(
@@ -3215,8 +3190,7 @@ class TerminalGraphicsRenderer(WorldObjectsMixin):
         except Exception:
             pass
 
-        # Scrollback should be disabled via history-limit=0 at startup
-        # This periodic clear is a backup in case that didn't work
+        # Clear scrollback every 900 frames (~30 seconds)
         if is_inside_tmux() and (self._frame_count - self._last_scrollback_clear) >= 900:
             self._clear_tmux_scrollback()
             self._last_scrollback_clear = self._frame_count

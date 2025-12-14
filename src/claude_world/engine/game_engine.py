@@ -8,7 +8,6 @@ from claude_world.types import (
     GameState,
     AgentActivity,
     AgentStatus,
-    TOOL_XP_REWARDS,
     check_achievements,
     AchievementPopup,
     check_milestones,
