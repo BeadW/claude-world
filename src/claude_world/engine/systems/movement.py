@@ -37,6 +37,22 @@ class MovementSystem:
         main.velocity.x *= self._friction
         main.velocity.y *= self._friction
 
+        # Update other entities
+        for entity in state.entities.values():
+            entity.position.x += entity.velocity.x * dt
+            entity.position.y += entity.velocity.y * dt
+            entity.velocity.x *= self._friction
+            entity.velocity.y *= self._friction
+
+        # Update particles
+        for particle in state.particles:
+            particle.position.x += particle.velocity.x * dt
+            particle.position.y += particle.velocity.y * dt
+            particle.lifetime -= dt
+
+        # Remove dead particles
+        state.particles = [p for p in state.particles if not p.is_dead]
+
     def _update_agent_movement(self, agent, dt: float) -> None:
         """Update agent movement toward target position."""
         if not agent.is_walking or agent.target_position is None:
@@ -71,19 +87,3 @@ class MovementSystem:
                 agent.facing_direction = 1
             elif dx < 0:
                 agent.facing_direction = -1
-
-        # Update other entities
-        for entity in state.entities.values():
-            entity.position.x += entity.velocity.x * dt
-            entity.position.y += entity.velocity.y * dt
-            entity.velocity.x *= self._friction
-            entity.velocity.y *= self._friction
-
-        # Update particles
-        for particle in state.particles:
-            particle.position.x += particle.velocity.x * dt
-            particle.position.y += particle.velocity.y * dt
-            particle.lifetime -= dt
-
-        # Remove dead particles
-        state.particles = [p for p in state.particles if not p.is_dead]

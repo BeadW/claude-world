@@ -327,6 +327,9 @@ class TerminalGraphicsRenderer:
         self._cached_verb: str | None = None
         self._verb_cache_frame = 0
 
+        # Memory management - clear terminal scrollback periodically
+        self._last_scrollback_clear = 0
+
     def render_frame(self, state: GameState) -> None:
         """Render a complete frame."""
         import time
@@ -336,12 +339,16 @@ class TerminalGraphicsRenderer:
         self._frame_count += 1
 
         try:
-            # Close previous frame to free memory
+            # Close previous frame and draw to free memory
+            if hasattr(self, 'draw') and self.draw is not None:
+                del self.draw
+                self.draw = None
             if hasattr(self, 'frame') and self.frame is not None:
                 self.frame.close()
+                self.frame = None
 
-            # Periodic garbage collection to prevent memory buildup
-            if self._frame_count % 100 == 0:
+            # More frequent garbage collection - every 30 frames (~1 second at 30fps)
+            if self._frame_count % 30 == 0:
                 import gc
                 gc.collect()
 
@@ -1906,6 +1913,12 @@ class TerminalGraphicsRenderer:
 
     def _display_kitty(self) -> None:
         """Display using Kitty graphics protocol."""
+        # Clear tmux scrollback buffer periodically to prevent memory leak
+        if is_inside_tmux() and (self._frame_count - self._last_scrollback_clear) >= 300:
+            self._clear_tmux_scrollback()
+            self._last_scrollback_clear = self._frame_count
+            self._first_frame = True  # Force full redraw after clear
+
         if self._first_frame:
             sys.stdout.write("\033[2J\033[H\033[?25l")
             self._first_frame = False
@@ -1933,6 +1946,13 @@ class TerminalGraphicsRenderer:
 
     def _display_iterm2(self) -> None:
         """Display using iTerm2 inline images."""
+        # Clear tmux scrollback buffer periodically to prevent memory leak
+        # iTerm2 images also accumulate in scrollback
+        if is_inside_tmux() and (self._frame_count - self._last_scrollback_clear) >= 300:
+            self._clear_tmux_scrollback()
+            self._last_scrollback_clear = self._frame_count
+            self._first_frame = True  # Force full redraw after clear
+
         if self._first_frame:
             sys.stdout.write("\033[2J\033[H\033[?25l")
             self._first_frame = False
@@ -1981,6 +2001,14 @@ class TerminalGraphicsRenderer:
                 self._first_frame = False
             return
 
+        # Clear tmux scrollback buffer periodically to prevent memory leak
+        # This is critical - terminals accumulate sixel data in scrollback
+        # Clear every 300 frames (~10 seconds at 30fps)
+        if is_inside_tmux() and (self._frame_count - self._last_scrollback_clear) >= 300:
+            self._clear_tmux_scrollback()
+            self._last_scrollback_clear = self._frame_count
+            self._first_frame = True  # Force full redraw after clear
+
         if self._first_frame:
             sys.stdout.write("\033[2J\033[H\033[?25l")
             self._first_frame = False
@@ -2006,6 +2034,19 @@ class TerminalGraphicsRenderer:
                 sys.stdout.flush()
             # Explicitly delete result to free subprocess buffers
             del result
+        except Exception:
+            pass
+
+    def _clear_tmux_scrollback(self) -> None:
+        """Clear tmux pane scrollback buffer to free terminal memory."""
+        import subprocess
+        try:
+            # Clear scrollback history for current pane
+            subprocess.run(
+                ["tmux", "clear-history"],
+                capture_output=True,
+                timeout=1,
+            )
         except Exception:
             pass
 
