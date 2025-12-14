@@ -24,42 +24,49 @@ class WorldObjectsMixin:
         raise NotImplementedError
 
     def _draw_world_objects(self, center_x: int, center_y: int, px: int, frame: int, state: GameState) -> None:
-        """Draw interactive objects at world locations - spread across the island."""
+        """Draw interactive objects at world locations - spread widely across the island."""
         current_loc = state.main_agent.current_location
 
-        # Palm tree reading spot (far left) - for reading/resting
-        palm_x = center_x - 140
-        palm_y = center_y - 30
+        # Calculate safe bounds (avoid water on edges)
+        # Water is 10% on each side, beach is 6% - stay inside beach
+        left_bound = int(self.width * 0.18)
+        right_bound = int(self.width * 0.82)
+        top_bound = int(self.height * 0.35)  # Sky area above this
+        bottom_bound = int(self.height * 0.92)
+
+        # Palm tree reading spot (far left, upper area) - for reading/resting
+        palm_x = left_bound + px * 10
+        palm_y = top_bound + int((bottom_bound - top_bound) * 0.25)
         self._draw_reading_palm(palm_x, palm_y, px, frame, active=(current_loc == "palm_tree"))
 
-        # Rock pile (far right) - for searching/bashing
-        rock_x = center_x + 130
-        rock_y = center_y + 50
+        # Rock pile (far right, lower area) - for searching/bashing
+        rock_x = right_bound - px * 10
+        rock_y = top_bound + int((bottom_bound - top_bound) * 0.75)
         self._draw_rock_pile(rock_x, rock_y, px, frame, active=(current_loc == "rock_pile"))
 
-        # Sandy patch (lower left) - for writing/building
-        sand_x = center_x - 100
-        sand_y = center_y + 60
+        # Sandy patch (left side, bottom) - for writing/building
+        sand_x = left_bound + int((right_bound - left_bound) * 0.20)
+        sand_y = bottom_bound - px * 8
         self._draw_sand_patch(sand_x, sand_y, px, frame, active=(current_loc == "sand_patch"))
 
-        # Tide pool (right edge near water) - for fetching
-        pool_x = center_x + 150
-        pool_y = center_y - 20
+        # Tide pool (right side, near top) - for fetching
+        pool_x = right_bound - px * 15
+        pool_y = top_bound + int((bottom_bound - top_bound) * 0.15)
         self._draw_tide_pool(pool_x, pool_y, px, frame, active=(current_loc == "tide_pool"))
 
-        # Bushes (lower right) - for searching
-        bush_x = center_x + 100
-        bush_y = center_y + 70
+        # Bushes (right of center, mid-height) - for searching
+        bush_x = left_bound + int((right_bound - left_bound) * 0.65)
+        bush_y = top_bound + int((bottom_bound - top_bound) * 0.50)
         self._draw_bush(bush_x, bush_y, px, frame, active=(current_loc == "bushes"))
 
-        # Message bottle at shore (far left)
-        bottle_x = center_x - 150
-        bottle_y = center_y + 30
+        # Message bottle at shore (far left, bottom area)
+        bottle_x = left_bound + px * 5
+        bottle_y = bottom_bound - px * 15
         self._draw_message_bottle(bottle_x, bottle_y, px, frame, active=(current_loc == "shore"))
 
-        # Thinking spot marker on hilltop (upper center)
-        hilltop_x = center_x
-        hilltop_y = center_y - 70
+        # Thinking spot marker on hilltop (center-right, upper area)
+        hilltop_x = left_bound + int((right_bound - left_bound) * 0.55)
+        hilltop_y = top_bound + px * 5
         self._draw_thinking_spot(hilltop_x, hilltop_y, px, frame, active=(current_loc == "hilltop"))
 
     def _draw_reading_palm(self, x: int, y: int, px: int, frame: int, active: bool = False) -> None:
