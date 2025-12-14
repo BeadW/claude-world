@@ -84,43 +84,48 @@ def get_terminal_pixel_width() -> int:
 
 
 def get_terminal_pixel_size() -> tuple[int, int]:
-    """Get terminal size in pixels for frame size.
+    """Get terminal/pane size in pixels.
 
-    In multi-pane mode: width from terminal, height from aspect ratio.
-    In single-pane mode: use actual terminal dimensions.
+    Uses ioctl to get actual pixel dimensions if available,
+    otherwise estimates from character dimensions.
     """
     import fcntl
     import struct
     import subprocess
     import termios
 
-    width = get_terminal_pixel_width()
+    xpixel, ypixel = 0, 0
 
-    # Check if we're in single-pane mode
+    # Try ioctl first - this gets the actual pane pixel size in tmux
+    try:
+        result = fcntl.ioctl(sys.stdout.fileno(), termios.TIOCGWINSZ, b'\x00' * 8)
+        rows, cols, xpixel, ypixel = struct.unpack('HHHH', result)
+    except Exception:
+        pass
+
+    # If ioctl gave us pixel size, use it
+    if xpixel > 0 and ypixel > 0:
+        return xpixel, ypixel
+
+    # Otherwise, get character dimensions and estimate
     if is_inside_tmux():
         try:
             result = subprocess.run(
-                ["tmux", "list-panes", "-F", "#{pane_id}"],
+                ["tmux", "display-message", "-p", "#{pane_width} #{pane_height}"],
                 capture_output=True,
                 text=True,
             )
-            pane_count = len(result.stdout.strip().split('\n')) if result.returncode == 0 else 1
+            if result.returncode == 0:
+                parts = result.stdout.strip().split()
+                if len(parts) == 2:
+                    cols, rows = int(parts[0]), int(parts[1])
         except Exception:
-            pane_count = 1
+            cols, rows = shutil.get_terminal_size()
+    else:
+        cols, rows = shutil.get_terminal_size()
 
-        if pane_count == 1:
-            # Single pane - use actual terminal height
-            try:
-                result = fcntl.ioctl(sys.stdout.fileno(), termios.TIOCGWINSZ, b'\x00' * 8)
-                _, _, _, ypixel = struct.unpack('HHHH', result)
-                if ypixel > 0:
-                    return width, ypixel
-            except Exception:
-                pass
-
-    # Multi-pane mode or fallback - use aspect ratio
-    height = int(width / ASPECT_RATIO)
-    return width, height
+    # Estimate pixels - typical cell is ~9x18 pixels
+    return cols * 9, rows * 18
 
 
 def get_cell_size() -> tuple[int, int]:

@@ -291,9 +291,6 @@ class TerminalGraphicsRenderer(WorldObjectsMixin):
         # Memory management - clear terminal scrollback periodically
         self._last_scrollback_clear = 0
 
-        # Resize tmux pane to match rendered frame
-        self._resize_tmux_pane()
-
     @staticmethod
     def _get_cell_size() -> tuple[int, int]:
         """Get terminal cell size in pixels."""
