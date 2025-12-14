@@ -14,6 +14,7 @@ from .entities import (
     AgentEntity,
     AgentActivity,
     AgentMood,
+    AgentStatus,
     Position,
     Velocity,
     AnimationState,
@@ -32,12 +33,31 @@ from .world import (
     ApiCostTracker,
     Progression,
     Particle,
+    FloatingText,
     TOOL_XP_REWARDS,
 )
 from .sprites import (
     Sprite,
     Animation,
     AnimationFrame,
+)
+from .achievements import (
+    Achievement,
+    AchievementCategory,
+    AchievementPopup,
+    ACHIEVEMENTS,
+    check_achievements,
+)
+from .milestones import (
+    Milestone,
+    MilestoneCategory,
+    MilestonePopup,
+    MilestoneReward,
+    MilestoneRewardType,
+    MILESTONES,
+    check_milestones,
+    get_unlocked_worlds,
+    get_next_milestone,
 )
 
 __all__ = [
@@ -54,6 +74,7 @@ __all__ = [
     "AgentEntity",
     "AgentActivity",
     "AgentMood",
+    "AgentStatus",
     "Position",
     "Velocity",
     "AnimationState",
@@ -71,9 +92,26 @@ __all__ = [
     "ApiCostTracker",
     "Progression",
     "Particle",
+    "FloatingText",
     "TOOL_XP_REWARDS",
     # Sprites
     "Sprite",
     "Animation",
     "AnimationFrame",
+    # Achievements
+    "Achievement",
+    "AchievementCategory",
+    "AchievementPopup",
+    "ACHIEVEMENTS",
+    "check_achievements",
+    # Milestones
+    "Milestone",
+    "MilestoneCategory",
+    "MilestonePopup",
+    "MilestoneReward",
+    "MilestoneRewardType",
+    "MILESTONES",
+    "check_milestones",
+    "get_unlocked_worlds",
+    "get_next_milestone",
 ]

@@ -252,6 +252,11 @@ class Progression:
         }
     )
     achievements: set[str] = field(default_factory=set)
+    milestones: set[str] = field(default_factory=set)
+    # Visual feedback state
+    level_up_timer: float = 0.0  # Time remaining for level-up celebration
+    display_xp: float = 0.0  # Smoothly animated XP display
+    xp_gain_flash: float = 0.0  # Flash timer when gaining XP
 
     @property
     def experience_to_next_level(self) -> int:
@@ -261,10 +266,12 @@ class Progression:
     def add_experience(self, amount: int) -> bool:
         """Add experience, returns True if leveled up."""
         self.experience += amount
+        self.xp_gain_flash = 0.5  # Flash for 0.5 seconds
         if self.experience >= self.experience_to_next:
             self.level += 1
             self.experience -= self.experience_to_next
             self.experience_to_next = int(self.experience_to_next * 1.5)
+            self.level_up_timer = 3.0  # Celebrate for 3 seconds
             return True
         return False
 
@@ -300,8 +307,12 @@ class Progression:
             total_session_time=self.total_session_time,
             tool_usage_breakdown=self.tool_usage_breakdown.copy(),
             skill_levels=self.skill_levels.copy(),
+            level_up_timer=self.level_up_timer,
+            display_xp=self.display_xp,
+            xp_gain_flash=self.xp_gain_flash,
         )
         result.achievements = self.achievements.copy()
+        result.milestones = self.milestones.copy()
         return result
 
 
@@ -352,6 +363,46 @@ class Particle:
 
 
 @dataclass
+class FloatingText:
+    """A floating text popup for visual feedback (e.g., +5 XP)."""
+
+    text: str
+    position: Position
+    color: tuple[int, int, int]
+    lifetime: float
+    max_lifetime: float
+    velocity_y: float = -50.0  # Floats upward
+    scale: float = 1.0
+
+    @property
+    def is_dead(self) -> bool:
+        """Check if text has expired."""
+        return self.lifetime <= 0
+
+    @property
+    def alpha(self) -> float:
+        """Get alpha based on lifetime (fade out)."""
+        return min(1.0, self.lifetime / self.max_lifetime)
+
+    def update(self, dt: float) -> None:
+        """Update position and lifetime."""
+        self.position.y += self.velocity_y * dt
+        self.lifetime -= dt
+
+    def copy(self) -> "FloatingText":
+        """Create a copy."""
+        return FloatingText(
+            text=self.text,
+            position=self.position.copy(),
+            color=self.color,
+            lifetime=self.lifetime,
+            max_lifetime=self.max_lifetime,
+            velocity_y=self.velocity_y,
+            scale=self.scale,
+        )
+
+
+@dataclass
 class GameState:
     """Complete game state."""
 
@@ -359,9 +410,12 @@ class GameState:
     entities: dict[str, Entity]
     main_agent: AgentEntity
     particles: list[Particle]
-    resources: Resources
-    progression: Progression
-    camera: Camera
+    floating_texts: list[FloatingText] = field(default_factory=list)
+    achievement_popups: list = field(default_factory=list)  # list[AchievementPopup]
+    milestone_popups: list = field(default_factory=list)  # list[MilestonePopup]
+    resources: Resources = field(default_factory=Resources)
+    progression: Progression = field(default_factory=Progression)
+    camera: Camera = field(default_factory=lambda: Camera(x=0, y=0))
     session_active: bool = False
 
     def copy(self) -> "GameState":
@@ -371,8 +425,34 @@ class GameState:
             entities={k: v.copy() for k, v in self.entities.items()},
             main_agent=self.main_agent.copy(),
             particles=[p.copy() for p in self.particles],
+            floating_texts=[ft.copy() for ft in self.floating_texts],
+            achievement_popups=[p.copy() for p in self.achievement_popups],
+            milestone_popups=[p.copy() for p in self.milestone_popups],
             resources=self.resources.copy(),
             progression=self.progression.copy(),
             camera=self.camera.copy(),
             session_active=self.session_active,
         )
+
+    def spawn_floating_text(
+        self,
+        text: str,
+        color: tuple[int, int, int],
+        offset_x: float = 0,
+        offset_y: float = -30,
+    ) -> None:
+        """Spawn a floating text popup near the main agent."""
+        import random
+        pos = Position(
+            self.main_agent.position.x + offset_x + random.uniform(-20, 20),
+            self.main_agent.position.y + offset_y,
+        )
+        self.floating_texts.append(FloatingText(
+            text=text,
+            position=pos,
+            color=color,
+            lifetime=1.5,
+            max_lifetime=1.5,
+            velocity_y=-40.0,
+            scale=1.0,
+        ))

@@ -8,7 +8,7 @@ This script creates a tmux session with:
 The game reacts to Claude's activities through the hook system.
 
 Usage:
-    python scripts/start_claude_world.py [--game-height 200] [--fps 30]
+    python scripts/start_claude_world.py [--fps 30]
 """
 
 import os
@@ -41,38 +41,21 @@ def get_session_name():
 
 
 def get_terminal_size():
-    """Get terminal size in columns, rows, and estimate cell dimensions."""
+    """Get terminal size in columns and rows."""
     cols, rows = shutil.get_terminal_size()
-    # Approximate character cell size (varies by font/terminal)
-    # These are reasonable defaults for most terminals
-    char_width = 10
-    char_height = 20
-    return cols, rows, char_width, char_height
+    return cols, rows
 
 
-def pixels_to_rows(pixel_height: int, char_height: int = 20) -> int:
-    """Convert pixel height to terminal rows."""
-    return max(5, (pixel_height + char_height - 1) // char_height)
-
-
-def create_tmux_session(session_name: str, game_height_px: int, fps: int):
+def create_tmux_session(session_name: str, fps: int):
     """Create tmux session with split panes.
 
     Args:
         session_name: Name for the tmux session.
-        game_height_px: Height of game area in pixels.
         fps: Target frames per second for game.
     """
     script_dir = Path(__file__).parent.absolute()
     game_renderer = script_dir / "game_renderer.py"
     project_root = script_dir.parent
-
-    # Get terminal dimensions
-    cols, rows, char_width, char_height = get_terminal_size()
-    game_rows = pixels_to_rows(game_height_px, char_height)
-
-    # Calculate game width based on terminal width
-    game_width_px = cols * char_width
 
     # Get Python from venv if available
     venv_python = project_root / ".venv" / "bin" / "python3"
@@ -85,8 +68,8 @@ def create_tmux_session(session_name: str, game_height_px: int, fps: int):
     term_program = os.environ.get("TERM_PROGRAM", "")
     term_env = f"TERM_PROGRAM={term_program}" if term_program else ""
 
-    # Game renderer command with explicit dimensions
-    game_cmd = f"{term_env} {python_cmd} {game_renderer} --width {game_width_px} --height {game_height_px} --fps {fps}".strip()
+    # Game renderer command - let it auto-detect size and resize pane
+    game_cmd = f"{term_env} {python_cmd} {game_renderer} --fps {fps}".strip()
 
     # Create new tmux session with GAME in first (top) pane
     subprocess.run([
@@ -101,6 +84,12 @@ def create_tmux_session(session_name: str, game_height_px: int, fps: int):
     subprocess.run([
         "tmux", "set-option", "-t", session_name, "status", "off"
     ], check=True)
+
+    # Set scrollback to 0 for game pane to prevent memory accumulation
+    # This is critical - iTerm2/terminals store inline images in scrollback
+    subprocess.run([
+        "tmux", "set-option", "-t", f"{session_name}:0.0", "history-limit", "0"
+    ], capture_output=True)  # May fail on some tmux versions
 
     # Enable mouse mode for independent pane scrolling
     subprocess.run([
@@ -122,10 +111,9 @@ def create_tmux_session(session_name: str, game_height_px: int, fps: int):
 
     # Wrap claude command to run from project directory (to pick up .claude/settings.json hooks)
     # and kill session when it exits
-    claude_cmd = f"cd {project_root} && claude; tmux kill-session -t {session_name}"
+    claude_cmd = f"""cd {project_root} && claude; tmux kill-session -t {session_name}"""
 
     # Split and run Claude in bottom pane
-    # Use -l to specify exact line count for game pane (more precise than percentage)
     subprocess.run([
         "tmux", "split-window",
         "-t", session_name,
@@ -133,18 +121,15 @@ def create_tmux_session(session_name: str, game_height_px: int, fps: int):
         "bash", "-c", claude_cmd,
     ], check=True)
 
-    # Resize the top pane (game) to exact row count
-    subprocess.run([
-        "tmux", "resize-pane",
-        "-t", f"{session_name}:0.0",  # Top pane (game)
-        "-y", str(game_rows),
-    ], check=True)
+    # Give game a moment to start and resize its pane
+    time.sleep(0.2)
 
     # Select the bottom pane (Claude) so user can interact immediately
     subprocess.run([
         "tmux", "select-pane",
         "-t", f"{session_name}:0.1",  # Bottom pane (Claude)
     ], check=True)
+
 
 
 def attach_to_session(session_name: str):
@@ -169,12 +154,6 @@ def main():
         description="Claude World - Animated game that reacts to Claude Code"
     )
     parser.add_argument(
-        "--game-height",
-        type=int,
-        default=300,
-        help="Height of game area in pixels (default: 300)",
-    )
-    parser.add_argument(
         "--fps",
         type=int,
         default=30,
@@ -183,11 +162,6 @@ def main():
 
     args = parser.parse_args()
 
-    # Validate game height
-    if args.game_height < 50 or args.game_height > 800:
-        print("Error: --game-height must be between 50 and 800 pixels")
-        sys.exit(1)
-
     # Check dependencies
     check_tmux()
     check_claude()
@@ -195,7 +169,7 @@ def main():
     session_name = get_session_name()
 
     try:
-        create_tmux_session(session_name, args.game_height, args.fps)
+        create_tmux_session(session_name, args.fps)
         time.sleep(0.3)  # Brief pause for session to initialize
         attach_to_session(session_name)
 

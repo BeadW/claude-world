@@ -8,7 +8,6 @@ import select
 import signal
 import subprocess
 import termios
-import tty
 from typing import Optional, Callable
 
 

@@ -7,7 +7,11 @@ from typing import Any, Optional
 from claude_world.types import (
     GameState,
     AgentActivity,
-    TOOL_XP_REWARDS,
+    AgentStatus,
+    check_achievements,
+    AchievementPopup,
+    check_milestones,
+    MilestonePopup,
 )
 from .state import GameStateManager
 from .entity import EntityManager
@@ -66,6 +70,34 @@ class GameEngine:
         for system in self._systems:
             system.update(state, dt)
 
+        # Update floating texts
+        for ft in state.floating_texts[:]:
+            ft.update(dt)
+            if ft.is_dead:
+                state.floating_texts.remove(ft)
+
+        # Update achievement popups
+        for popup in state.achievement_popups[:]:
+            popup.update(dt)
+            if popup.is_dead:
+                state.achievement_popups.remove(popup)
+
+        # Update milestone popups
+        for popup in state.milestone_popups[:]:
+            popup.update(dt)
+            if popup.is_dead:
+                state.milestone_popups.remove(popup)
+
+        # Update progression timers
+        if state.progression.level_up_timer > 0:
+            state.progression.level_up_timer -= dt
+        if state.progression.xp_gain_flash > 0:
+            state.progression.xp_gain_flash -= dt
+
+        # Smoothly animate display_xp toward actual experience
+        target_xp = float(state.progression.experience)
+        state.progression.display_xp += (target_xp - state.progression.display_xp) * min(1.0, dt * 5.0)
+
         # Sync state back
         self._entity_manager._state = state
 
@@ -92,7 +124,14 @@ class GameEngine:
         if event_type == "CHANGE_ACTIVITY":
             activity = data.get("activity", AgentActivity.IDLE)
             tool_name = data.get("tool_name")
-            self._entity_manager.set_main_agent_activity(activity, tool_name)
+            agent_id = data.get("agent_id")  # None = main agent
+
+            if agent_id is None:
+                # Main agent activity change
+                self._entity_manager.set_main_agent_activity(activity, tool_name)
+            else:
+                # Subagent activity change
+                self._entity_manager.set_subagent_activity(agent_id, activity, tool_name)
 
         elif event_type == "SPAWN_AGENT":
             self._entity_manager.spawn_subagent(
@@ -102,21 +141,57 @@ class GameEngine:
             )
             state = self._entity_manager.get_state()
             state.progression.total_subagents_spawned += 1
+            # Set status to working
+            agent_id = data.get("agent_id", "")
+            if agent_id in state.entities:
+                agent = state.entities[agent_id]
+                if hasattr(agent, 'status'):
+                    agent.status = AgentStatus.WORKING
 
         elif event_type == "REMOVE_AGENT":
-            self._entity_manager.remove_entity(data.get("agent_id", ""))
+            agent_id = data.get("agent_id", "")
+            # Remove the agent immediately (status was shown during task)
+            self._entity_manager.remove_entity(agent_id)
 
         elif event_type == "AWARD_RESOURCES":
             state = self._entity_manager.get_state()
 
             if "xp" in data:
-                state.progression.add_experience(data["xp"])
+                xp_amount = data["xp"]
+                leveled_up = state.progression.add_experience(xp_amount)
+                # Spawn floating XP text
+                state.spawn_floating_text(
+                    f"+{xp_amount} XP",
+                    color=(200, 100, 255),  # Purple for XP
+                    offset_x=-30,
+                )
+                if leveled_up:
+                    # Spawn level-up text
+                    state.spawn_floating_text(
+                        f"LEVEL {state.progression.level}!",
+                        color=(255, 215, 0),  # Gold
+                        offset_x=0,
+                        offset_y=-50,
+                    )
 
             if "tokens" in data:
-                state.resources.tokens += data["tokens"]
+                tokens_amount = data["tokens"]
+                state.resources.tokens += tokens_amount
+                # Spawn floating token text
+                state.spawn_floating_text(
+                    f"+{tokens_amount}",
+                    color=(255, 200, 50),  # Gold for tokens
+                    offset_x=30,
+                )
 
             if "connections" in data:
-                state.resources.connections += data["connections"]
+                conn_amount = data["connections"]
+                state.resources.connections += conn_amount
+                state.spawn_floating_text(
+                    f"+{conn_amount} conn",
+                    color=(100, 200, 100),  # Green for connections
+                    offset_x=0,
+                )
 
             if "tool_name" in data:
                 tool_name = data["tool_name"]
@@ -124,6 +199,26 @@ class GameEngine:
                 state.progression.tool_usage_breakdown[tool_name] = (
                     state.progression.tool_usage_breakdown.get(tool_name, 0) + 1
                 )
+
+            # Check for newly unlocked achievements
+            newly_unlocked = check_achievements(state)
+            for achievement in newly_unlocked:
+                popup = AchievementPopup(
+                    achievement=achievement,
+                    lifetime=4.0,
+                    max_lifetime=4.0,
+                )
+                state.achievement_popups.append(popup)
+
+            # Check for newly reached milestones
+            newly_reached = check_milestones(state)
+            for milestone in newly_reached:
+                popup = MilestonePopup(
+                    milestone=milestone,
+                    lifetime=5.0,
+                    max_lifetime=5.0,
+                )
+                state.milestone_popups.append(popup)
 
         elif event_type == "SPAWN_PARTICLES":
             # Particle spawning is handled by the renderer

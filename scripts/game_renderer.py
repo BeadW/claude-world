@@ -31,7 +31,20 @@ class GameRenderer:
             height: Renderer height (0 = auto-detect).
             fps: Target frames per second.
         """
+        import shutil
+        import time
+
         self.fps = fps
+
+        # Wait for tmux to attach and resize the pane
+        # The pane starts at 80 columns, then resizes when the user attaches
+        print("Waiting for terminal to initialize...")
+        for _ in range(20):  # Wait up to 2 seconds
+            cols, _ = shutil.get_terminal_size()
+            if cols > 80:
+                break
+            time.sleep(0.1)
+        time.sleep(0.2)  # Extra buffer after resize
 
         # Create game components - let renderer auto-detect size from tmux
         self.state = create_tropical_island()
@@ -129,22 +142,10 @@ class GameRenderer:
             return {"success": False, "message": f"Unknown action: {action_type}"}
 
     def handle_resize(self, signum=None, frame=None):
-        """Handle terminal resize."""
-        import shutil
-
-        cols, rows = shutil.get_terminal_size()
-        char_width = 10
-        char_height = 20
-
-        new_width = cols * char_width
-        new_height = rows * char_height
-
-        if new_width != self.width or new_height != self.height:
-            self.width = new_width
-            self.height = new_height
-            self.renderer = TerminalGraphicsRenderer(width=new_width, height=new_height)
-            self.game_loop.renderer = self.renderer
-            self.renderer.force_clear()
+        """Handle terminal resize - renderer enforces pane size, nothing to do here."""
+        # The renderer periodically enforces pane size via _resize_tmux_pane()
+        # so we don't need to do anything special on SIGWINCH
+        pass
 
     def check_focus_events(self) -> None:
         """Check for focus in/out events (non-blocking)."""
@@ -173,16 +174,16 @@ class GameRenderer:
         protocol = detect_graphics_protocol()
         print(f"Claude World Game Renderer")
         print(f"Graphics: {protocol} | Size: {self.width}x{self.height} | FPS: {self.fps}")
-        print("Waiting for Claude events...")
+        print("Starting...")
         sys.stdout.flush()
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.3)
 
         # Set up signal handlers
         if hasattr(signal, 'SIGWINCH'):
             signal.signal(signal.SIGWINCH, self.handle_resize)
 
-        # Enable focus reporting
-        self.renderer.enable_focus_reporting()
+        # Focus reporting disabled - was causing flicker
+        # self.renderer.enable_focus_reporting()
 
         # Set up event, query, and action handlers
         self.event_bridge.on_event = self.handle_event
@@ -206,8 +207,8 @@ class GameRenderer:
             self.game_loop.start()
 
             while self._running:
-                # Check for focus events
-                self.check_focus_events()
+                # Focus events disabled - was causing flicker
+                # self.check_focus_events()
 
                 if self._has_focus:
                     self.game_loop.process_frame()

@@ -45,6 +45,15 @@ class AgentMood(Enum):
     TIRED = "tired"
 
 
+class AgentStatus(Enum):
+    """Status of an agent's current task."""
+
+    WORKING = "working"
+    COMPLETE = "complete"
+    ERROR = "error"
+    IDLE = "idle"
+
+
 @dataclass
 class Position:
     """2D position in the world."""
@@ -169,12 +178,14 @@ class AgentEntity(Entity):
     agent_type: Optional[str] = None
     activity: AgentActivity = AgentActivity.IDLE
     mood: AgentMood = AgentMood.NEUTRAL
+    status: AgentStatus = AgentStatus.IDLE  # Task completion status
     energy: float = 100.0
     experience: int = 0
     tools_used: list[str] = field(default_factory=list)
     current_tool: Optional[str] = None  # Current tool being used (for activity verb display)
     last_tool: Optional[str] = None  # Last tool used (for minimum display time)
     last_tool_time: float = 0.0  # Timestamp when last tool started
+    status_timer: float = 0.0  # Timer for status display (e.g., show "complete" for 2 seconds)
 
     # Movement system
     target_position: Optional[Position] = None  # Where Claude is walking to
@@ -205,12 +216,14 @@ class AgentEntity(Entity):
             agent_type=self.agent_type,
             activity=self.activity,
             mood=self.mood,
+            status=self.status,
             energy=self.energy,
             experience=self.experience,
             tools_used=self.tools_used.copy(),
             current_tool=self.current_tool,
             last_tool=self.last_tool,
             last_tool_time=self.last_tool_time,
+            status_timer=self.status_timer,
             target_position=self.target_position.copy() if self.target_position else None,
             move_speed=self.move_speed,
             is_walking=self.is_walking,

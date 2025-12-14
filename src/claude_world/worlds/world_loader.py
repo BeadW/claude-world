@@ -7,6 +7,9 @@ from typing import Any, Dict, Optional
 from claude_world.types import GameState
 
 from .tropical_island import TropicalIslandConfig, create_tropical_island
+from .mountain_peak import MountainPeakConfig, create_mountain_peak
+from .digital_grid import DigitalGridConfig, create_digital_grid
+from .cloud_kingdom import CloudKingdomConfig, create_cloud_kingdom
 
 
 class WorldLoader:
@@ -16,9 +19,15 @@ class WorldLoader:
         """Initialize the world loader."""
         self._world_factories = {
             "tropical-island": self._create_tropical_island,
+            "mountain-peak": self._create_mountain_peak,
+            "digital-grid": self._create_digital_grid,
+            "cloud-kingdom": self._create_cloud_kingdom,
         }
         self._configs: Dict[str, Any] = {
             "tropical-island": TropicalIslandConfig(),
+            "mountain-peak": MountainPeakConfig(),
+            "digital-grid": DigitalGridConfig(),
+            "cloud-kingdom": CloudKingdomConfig(),
         }
 
     @property
@@ -102,3 +111,45 @@ class WorldLoader:
             GameState for tropical island.
         """
         return create_tropical_island(config)
+
+    def _create_mountain_peak(
+        self,
+        config: Optional[MountainPeakConfig] = None,
+    ) -> GameState:
+        """Create mountain peak world.
+
+        Args:
+            config: Optional configuration.
+
+        Returns:
+            GameState for mountain peak.
+        """
+        return create_mountain_peak(config)
+
+    def _create_digital_grid(
+        self,
+        config: Optional[DigitalGridConfig] = None,
+    ) -> GameState:
+        """Create digital grid world.
+
+        Args:
+            config: Optional configuration.
+
+        Returns:
+            GameState for digital grid.
+        """
+        return create_digital_grid(config)
+
+    def _create_cloud_kingdom(
+        self,
+        config: Optional[CloudKingdomConfig] = None,
+    ) -> GameState:
+        """Create cloud kingdom world.
+
+        Args:
+            config: Optional configuration.
+
+        Returns:
+            GameState for cloud kingdom.
+        """
+        return create_cloud_kingdom(config)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import random
 from typing import Optional
 
 from claude_world.types import (
@@ -19,17 +18,17 @@ from claude_world.types import (
 
 
 # World locations where Claude can go for different activities
-# Positions are relative offsets from center (0, 0)
-# These are thematic for the tropical island world
+# Positions are relative offsets from center (0, 0) - spread WIDELY across the island
+# Values ±180 are near edges, ±80 is near y-bounds
 WORLD_LOCATIONS = {
-    "center": Position(0, 0),             # Default idle position - the clearing
-    "palm_tree": Position(-70, -15),      # By the palm tree - for reading/resting
-    "rock_pile": Position(75, 25),        # Rock pile - for searching under rocks
-    "sand_patch": Position(-55, 35),      # Sandy area - for digging/building
-    "tide_pool": Position(85, -10),       # By the water - for exploring/fetching
-    "hilltop": Position(0, -50),          # Higher ground - for thinking/planning
-    "shore": Position(-85, 20),           # Beach shore - for communication (messages in bottles)
-    "bushes": Position(60, 45),           # Dense bushes - for searching
+    "center": Position(0, 0),              # Default idle position - the clearing
+    "palm_tree": Position(-170, -50),      # Far left, upper area - for reading/resting
+    "rock_pile": Position(170, 60),        # Far right, lower area - for searching/bashing
+    "sand_patch": Position(-130, 80),      # Left side, bottom - for writing/building
+    "tide_pool": Position(160, -60),       # Right side, near top - for fetching
+    "hilltop": Position(80, -80),          # Center-right, upper area - for thinking/planning
+    "shore": Position(-180, 70),           # Far left, bottom - for messages
+    "bushes": Position(120, 30),           # Right of center, mid-height - for searching
 }
 
 # Tool → Location mapping (themed for tropical island)
@@ -185,6 +184,28 @@ class EntityManager:
         elif activity == AgentActivity.IDLE:
             # Return to center when idle
             self._move_to_location("center")
+
+    def set_subagent_activity(
+        self, agent_id: str, activity: AgentActivity, tool_name: str | None = None
+    ) -> None:
+        """Set a subagent's activity.
+
+        Args:
+            agent_id: The ID of the subagent.
+            activity: The new activity.
+            tool_name: The tool currently being used.
+        """
+        import time
+
+        entity = self._state.entities.get(agent_id)
+        if entity and hasattr(entity, 'set_activity'):
+            entity.set_activity(activity)
+            entity.current_tool = tool_name
+
+            # Track last tool for display
+            if tool_name is not None:
+                entity.last_tool = tool_name
+                entity.last_tool_time = time.time()
 
     def _move_to_tool_location(self, tool_name: str) -> None:
         """Move Claude to the location for a specific tool."""
